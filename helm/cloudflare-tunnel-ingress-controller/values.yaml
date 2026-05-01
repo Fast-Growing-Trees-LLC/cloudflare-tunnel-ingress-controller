@@ -94,6 +94,16 @@ cloudflared:
   # Extra arguments to pass to cloudflared command
   # Example: ["--post-quantum", "--edge-ip-version", "4"]
   extraArgs: []
+  # Resource requests/limits for the controlled cloudflared connector pods.
+  # Empty by default — the controller leaves Resources unset, matching
+  # pre-0.2.0 behavior. Override per-environment via Helm values.
+  resources: {}
+  #   requests:
+  #     cpu: 100m
+  #     memory: 128Mi
+  #   limits:
+  #     cpu: 500m
+  #     memory: 512Mi
 
 cloudflaredServiceMonitor:
   create: false

@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -56,6 +57,11 @@ func CreateOrUpdateControlledCloudflared(
 			return errors.Wrap(err, "fetch tunnel token")
 		}
 
+		desiredResources, err := getDesiredResources()
+		if err != nil {
+			return errors.Wrap(err, "get desired resources")
+		}
+
 		if len(existingDeployment.Spec.Template.Spec.Containers) > 0 {
 			container := &existingDeployment.Spec.Template.Spec.Containers[0]
 			if container.Image != os.Getenv("CLOUDFLARED_IMAGE") {
@@ -68,6 +74,11 @@ func CreateOrUpdateControlledCloudflared(
 			// Check if command arguments have changed
 			desiredCommand := buildCloudflaredCommand(protocol, token, extraArgs)
 			if !slices.Equal(container.Command, desiredCommand) {
+				needsUpdate = true
+			}
+
+			// Check if resource requests/limits have drifted
+			if !reflect.DeepEqual(container.Resources, desiredResources) {
 				needsUpdate = true
 			}
 		}
@@ -125,6 +136,15 @@ func cloudflaredConnectDeploymentTemplating(protocol string, token string, names
 		pullPolicy = "IfNotPresent"
 	}
 
+	// Resources are derived from CLOUDFLARED_RESOURCES_* env vars.
+	// On parse error we fall back to an empty ResourceRequirements (no
+	// requests/limits) — keeps the controller forward-compatible with
+	// older charts that don't set these env vars.
+	resources, err := getDesiredResources()
+	if err != nil {
+		resources = v1.ResourceRequirements{}
+	}
+
 	return &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      appName,
@@ -151,13 +171,14 @@ func cloudflaredConnectDeploymentTemplating(protocol string, token string, names
 					},
 				},
 				Spec: v1.PodSpec{
-					Affinity:  buildPodAntiAffinity(appName, replicas),
+					Affinity: buildPodAntiAffinity(appName, replicas),
 					Containers: []v1.Container{
 						{
 							Name:            appName,
 							Image:           image,
 							ImagePullPolicy: v1.PullPolicy(pullPolicy),
 							Command:         buildCloudflaredCommand(protocol, token, extraArgs),
+							Resources:       resources,
 						},
 					},
 					RestartPolicy: v1.RestartPolicyAlways,
@@ -210,6 +231,45 @@ func getDesiredReplicas() (int32, error) {
 		return 0, errors.Wrap(err, "invalid replica count")
 	}
 	return int32(replicas), nil
+}
+
+// getDesiredResources reads the CLOUDFLARED_RESOURCES_* env vars and returns
+// a v1.ResourceRequirements. Empty env vars are skipped — Requests/Limits are
+// only populated for keys that are explicitly set, so an unconfigured chart
+// produces an empty ResourceRequirements (no requests/limits, same as before).
+func getDesiredResources() (v1.ResourceRequirements, error) {
+	res := v1.ResourceRequirements{}
+
+	parse := func(envVar string, dst *v1.ResourceList, key v1.ResourceName) error {
+		raw := os.Getenv(envVar)
+		if raw == "" {
+			return nil
+		}
+		q, err := resource.ParseQuantity(raw)
+		if err != nil {
+			return errors.Wrapf(err, "parse %s", envVar)
+		}
+		if *dst == nil {
+			*dst = v1.ResourceList{}
+		}
+		(*dst)[key] = q
+		return nil
+	}
+
+	if err := parse("CLOUDFLARED_RESOURCES_REQUESTS_CPU", &res.Requests, v1.ResourceCPU); err != nil {
+		return v1.ResourceRequirements{}, err
+	}
+	if err := parse("CLOUDFLARED_RESOURCES_REQUESTS_MEMORY", &res.Requests, v1.ResourceMemory); err != nil {
+		return v1.ResourceRequirements{}, err
+	}
+	if err := parse("CLOUDFLARED_RESOURCES_LIMITS_CPU", &res.Limits, v1.ResourceCPU); err != nil {
+		return v1.ResourceRequirements{}, err
+	}
+	if err := parse("CLOUDFLARED_RESOURCES_LIMITS_MEMORY", &res.Limits, v1.ResourceMemory); err != nil {
+		return v1.ResourceRequirements{}, err
+	}
+
+	return res, nil
 }
 
 func buildCloudflaredCommand(protocol string, token string, extraArgs []string) []string {

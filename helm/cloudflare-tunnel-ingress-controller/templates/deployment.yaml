@@ -88,6 +88,28 @@ spec:
               value: {{ .Values.cloudflared.image.pullPolicy | quote }}
             - name: CLOUDFLARED_REPLICA_COUNT
               value: {{ .Values.cloudflared.replicaCount | quote }}
+            {{- with .Values.cloudflared.resources }}
+            {{- with .requests }}
+            {{- if .cpu }}
+            - name: CLOUDFLARED_RESOURCES_REQUESTS_CPU
+              value: {{ .cpu | quote }}
+            {{- end }}
+            {{- if .memory }}
+            - name: CLOUDFLARED_RESOURCES_REQUESTS_MEMORY
+              value: {{ .memory | quote }}
+            {{- end }}
+            {{- end }}
+            {{- with .limits }}
+            {{- if .cpu }}
+            - name: CLOUDFLARED_RESOURCES_LIMITS_CPU
+              value: {{ .cpu | quote }}
+            {{- end }}
+            {{- if .memory }}
+            - name: CLOUDFLARED_RESOURCES_LIMITS_MEMORY
+              value: {{ .memory | quote }}
+            {{- end }}
+            {{- end }}
+            {{- end }}
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
       {{- with .Values.nodeSelector }}
