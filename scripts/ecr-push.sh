@@ -39,11 +39,22 @@ echo "==> Logging in to ECR..."
 aws ecr get-login-password --region "${AWS_REGION}" \
   | docker login --username AWS --password-stdin "${REGISTRY}"
 
+# TLS-inspecting proxy (Cloudflare Gateway via WARP): the host trusts the
+# Gateway CA but build containers don't, so go mod download fails cert
+# verification. Pass the CA through to the builder stage when present.
+EXTRA_CA_ARGS=()
+GATEWAY_CA=$(security find-certificate -c "Gateway CA - Cloudflare Managed" -p /Library/Keychains/System.keychain 2>/dev/null || true)
+if [ -n "${GATEWAY_CA}" ]; then
+  echo "==> Injecting Cloudflare Gateway CA into build"
+  EXTRA_CA_ARGS=(--build-arg "EXTRA_CA_CERTS=${GATEWAY_CA}")
+fi
+
 echo "==> Building linux/amd64 image..."
 docker buildx build \
   --platform linux/amd64 \
   --file image/cloudflare-tunnel-ingress-controller/Dockerfile \
   --tag "${IMAGE}" \
+  ${EXTRA_CA_ARGS[@]+"${EXTRA_CA_ARGS[@]}"} \
   --push \
   .
 
