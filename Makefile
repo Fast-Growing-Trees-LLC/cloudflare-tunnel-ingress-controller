@@ -21,6 +21,10 @@ unit-test:
 integration-test: setup-envtest
 	KUBEBUILDER_ASSETS="$(shell setup-envtest use $(ENVTEST_K8S_VERSION) -p path)" CGO_ENABLED=1 go test -race -v -coverpkg=./... -coverprofile ./test/integration/cover.out ./test/integration/...
 
+.PHONY: chart-test
+chart-test:
+	bash ./hack/helm-render-test.sh
+
 .PHONY: e2e-image
 e2e-image:
 	DOCKER_BUILDKIT=1 TARGETARCH=amd64 docker build --build-arg COVER=1 --build-arg RUNTIME_BASE=gcr.io/distroless/base-debian12:debug-nonroot -t $(E2E_CONTROLLER_IMAGE) -f ./image/cloudflare-tunnel-ingress-controller/Dockerfile .

@@ -19,3 +19,6 @@ jobs:
       - name: Run helm package
         run: |
           helm package ./helm/cloudflare-tunnel-ingress-controller
+      - name: Assert the rendered controller flags
+        run: |
+          make chart-test

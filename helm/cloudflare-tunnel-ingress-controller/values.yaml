@@ -91,6 +91,39 @@ affinity: {}
 # See: https://developers.cloudflare.com/dns/manage-dns-records/reference/record-attributes/
 dnsCommentTemplate: "managed by cloudflare-tunnel-ingress-controller, tunnel [{{.TunnelName}}]"
 
+# Cloudflare Access integration. When disabled the controller never calls the
+# Cloudflare Access API and the access annotations on Ingress objects are
+# rejected. Enabling it requires the API token to additionally carry the
+# "Access: Apps Write" permission.
+access:
+  enabled: false
+  # Reusable Access policy IDs (UUIDs, not policy names) attached to every
+  # application the controller creates, in ascending order of precedence. An
+  # ingress that asks for Access with no policy from either source is taken
+  # offline rather than published unprotected, so configure these before
+  # annotating a hostname that is already serving traffic. Create the policies in the
+  # Cloudflare Zero Trust dashboard first: the controller attaches policies, it
+  # never creates or edits them. The IDs are validated once at startup and the
+  # controller refuses to start if any of them does not exist. Overridden per
+  # ingress by the
+  # cloudflare-tunnel-ingress-controller.strrl.dev/access-policies annotation.
+  policies: []
+  # Access identity provider IDs. Empty lets Cloudflare apply the organisation
+  # default (all configured providers). Note that emptying this value later does
+  # not clear the identity providers on applications that already have them; the
+  # Cloudflare API has no way to express "clear". Use the dashboard for that.
+  allowedIdps: []
+  # Access session duration as a non negative Go duration string, for example
+  # "24h", "1h30m", or "0s" to re-authenticate on every request. Empty lets
+  # Cloudflare apply its own default. As with allowedIdps, emptying this value
+  # later does not reset the duration on applications that already have one.
+  sessionDuration: ""
+  # How often each controlled ingress is re-reconciled so that an Access
+  # application deleted outside Kubernetes is recreated without waiting for an
+  # ingress event. Set to 0 to disable, accepting that an application deleted in
+  # the dashboard leaves the hostname public until the next ingress event.
+  resyncInterval: 10m
+
 clusterDomain: cluster.local
 
 leaderElection:
