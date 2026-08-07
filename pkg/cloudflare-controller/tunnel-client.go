@@ -193,21 +193,69 @@ func withdrawnHostnames(plan accessPlan) map[string]struct{} {
 	return hostnames
 }
 
+// accessPolicyLister lists the account's reusable Access policies. It exists so
+// the startup validation's retry and degrade behaviour can be tested without a
+// live Cloudflare API.
+type accessPolicyLister func(ctx context.Context) ([]cloudflare.AccessPolicy, error)
+
+const (
+	// accessPolicyValidationAttempts bounds the startup listing retry. Three
+	// tries ride out a transient 5xx without meaningfully delaying pod startup.
+	accessPolicyValidationAttempts = 3
+	// accessPolicyValidationBackoff is the wait before the second attempt, and
+	// is doubled for each attempt after that.
+	accessPolicyValidationBackoff = 2 * time.Second
+)
+
 // validateAccessPolicies runs once at startup when Access is enabled. It lists
 // the account's reusable Access policies and returns an error naming every
 // configured default policy ID that does not exist. An invalid policy UUID is
 // otherwise not detected until a create fails at runtime, which would stall the
 // sync for the whole cluster instead of crash looping one pod with a message
 // naming the bad ID.
+//
+// A listing that fails outright is a different thing from a listing that
+// succeeds and comes back without one of the configured IDs, and the two are
+// deliberately not treated alike. See validateAccessPoliciesWith.
 func (t *TunnelClient) validateAccessPolicies(ctx context.Context) error {
+	return t.validateAccessPoliciesWith(ctx, t.listAccessPolicies, accessPolicyValidationAttempts, accessPolicyValidationBackoff)
+}
+
+func (t *TunnelClient) listAccessPolicies(ctx context.Context) ([]cloudflare.AccessPolicy, error) {
+	policies, _, err := t.cfClient.ListAccessPolicies(ctx, cloudflare.AccountIdentifier(t.accountId), cloudflare.ListAccessPoliciesParams{})
+	return policies, err
+}
+
+// validateAccessPoliciesWith is validateAccessPolicies with the listing, the
+// attempt count and the backoff injected.
+//
+// The two failure directions are not symmetric:
+//
+//   - The listing succeeded and a configured ID is not among the results. That
+//     is a settled fact about the configuration, so it is fatal: the pod
+//     refuses to start with a message naming the bad ID.
+//   - The listing itself failed - network, 5xx, a token without the read scope.
+//     After a bounded retry this logs loudly, names the policy IDs it could not
+//     verify, and starts anyway.
+//
+// Starting anyway is the point. This validation is an early-warning
+// optimisation, not the safety mechanism: a malformed policy ID is quarantined
+// at plan time and a well formed but nonexistent one fails fast at create time,
+// so no hostname is ever published without the protection its annotations asked
+// for whether or not this check ran. Refusing to start because the listing
+// errored would trade a small diagnostic head start for a cluster-wide DNS
+// outage - every ingress in the cluster stops reconciling because one read call
+// returned a 403 or a 502.
+func (t *TunnelClient) validateAccessPoliciesWith(ctx context.Context, list accessPolicyLister, attempts int, backoff time.Duration) error {
 	if !t.access.Enabled || len(t.access.Policies) == 0 {
 		return nil
 	}
 
-	policies, _, err := t.cfClient.ListAccessPolicies(ctx, cloudflare.AccountIdentifier(t.accountId), cloudflare.ListAccessPoliciesParams{})
+	policies, err := listWithRetry(ctx, list, attempts, backoff)
 	if err != nil {
-		metrics.CloudflareAPIErrors.WithLabelValues("list_access_policies").Inc()
-		return errors.Wrap(err, "list access policies")
+		t.logger.Error(err, "WARNING: could not list Cloudflare Access policies at startup, starting anyway with the configured policy IDs unverified; a bad ID will now surface as a failed Access application create instead of a startup failure",
+			"unverifiedPolicyIDs", strings.Join(t.access.Policies, ", "), "attempts", attempts)
+		return nil
 	}
 
 	var known []string
@@ -225,6 +273,32 @@ func (t *TunnelClient) validateAccessPolicies(ctx context.Context) error {
 		return errors.Errorf("configured access policies are not reusable policies on this account: %s", strings.Join(missing, ", "))
 	}
 	return nil
+}
+
+// listWithRetry calls list up to attempts times with an exponential backoff,
+// counting every failure on cloudflare_api_errors_total. A cancelled context
+// stops the retry immediately - there is nothing to wait for once the process
+// is shutting down.
+func listWithRetry(ctx context.Context, list accessPolicyLister, attempts int, backoff time.Duration) ([]cloudflare.AccessPolicy, error) {
+	var err error
+	for attempt := 1; attempt <= attempts; attempt++ {
+		var policies []cloudflare.AccessPolicy
+		policies, err = list(ctx)
+		if err == nil {
+			return policies, nil
+		}
+		metrics.CloudflareAPIErrors.WithLabelValues("list_access_policies").Inc()
+		if attempt == attempts {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, errors.Wrap(err, "list access policies")
+		case <-time.After(backoff):
+		}
+		backoff *= 2
+	}
+	return nil, errors.Wrapf(err, "list access policies, %d attempt(s)", attempts)
 }
 
 // planAccessApplications lists the account's Access applications and computes
@@ -699,16 +773,28 @@ func removedHostnamesInZone(interested []string, records []cloudflare.DNSRecord,
 // One zone, never several: two zones in one account can both suffix-match a
 // hostname when one is a subdomain zone of the other, and consulting both lets
 // the zone that never held the record decide it is gone.
+//
+// Which one of several matches wins is the longest zone name, not the first in
+// ListZones order. Cloudflare answers a name from the most specific zone that
+// covers it, so a hostname under a child zone lives in the child zone even when
+// the parent is listed first, and resolving it to the parent would look in a
+// zone that never held the record.
 func zoneForHostname(hostname string, zones []string) (bool, string) {
 	hostnameDomain := Domain{Name: hostname}
 
+	found := false
+	best := ""
 	for _, zone := range zones {
 		zoneDomain := Domain{Name: zone}
-		if hostnameDomain.IsSubDomainOf(zoneDomain) || hostnameDomain.Name == zoneDomain.Name {
-			return true, zone
+		if !hostnameDomain.IsSubDomainOf(zoneDomain) && hostnameDomain.Name != zoneDomain.Name {
+			continue
+		}
+		if !found || len(zone) > len(best) {
+			found = true
+			best = zone
 		}
 	}
-	return false, ""
+	return found, best
 }
 
 func zoneBelongedByExposure(exposure exposure.Exposure, zones []string) (bool, string) {

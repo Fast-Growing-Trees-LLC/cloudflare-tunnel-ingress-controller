@@ -30,7 +30,9 @@ curl -s -H "Authorization: Bearer <CLOUDFLARE_API_TOKEN>" \
 
 Reusable policies are the intended input. Policies created inline on a single application are not addressable by ID and cannot be used here, and the controller never creates, edits, or deletes a policy: their lifecycle stays in the dashboard or in your own Terraform.
 
-The controller checks these IDs once at startup and refuses to start if one of them is not a reusable policy on the account. A typo therefore shows up as a crash-looping pod with the offending ID in its log, not as a hostname that silently lost its protection.
+The controller checks these IDs once at startup and refuses to start if the account's policy list comes back without one of them. A typo therefore shows up as a crash-looping pod with the offending ID in its log, not as a hostname that silently lost its protection.
+
+If the listing itself fails - a transient error, or a token that cannot read policies - the controller retries a few times and then starts anyway, logging a warning that names the IDs it could not verify. The check is an early warning, not the protection: an ID that is not a policy UUID is caught when the application is planned, and one that is well formed but does not exist fails the create, so a hostname is never published without the Access application its annotations asked for.
 
 ## 3. Enable Access on the controller
 

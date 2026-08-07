@@ -1,6 +1,7 @@
 package cloudflarecontroller
 
 import (
+	"context"
 	"reflect"
 	"slices"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/exposure"
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
+	"github.com/pkg/errors"
 )
 
 func TestRenderDNSComment(t *testing.T) {
@@ -382,6 +384,80 @@ func Test_applyAccessDeletesGate(t *testing.T) {
 	}
 }
 
+func Test_validateAccessPoliciesListingSucceeds(t *testing.T) {
+	const configured = "8b1c0d7e-4f2a-4b6c-9d31-0a5e7c2f1b40"
+	client := accessTestClient(exposure.AccessDefaults{Enabled: true, Policies: []string{configured}})
+
+	// the §7 criterion: a configured ID the account does not have is a settled
+	// fact about the configuration, so the pod refuses to start and says which
+	calls := 0
+	absent := func(context.Context) ([]cloudflare.AccessPolicy, error) {
+		calls++
+		return []cloudflare.AccessPolicy{{ID: "3f0b5a11-8c47-4d2e-9a63-1e8f4c7d2a05"}}, nil
+	}
+	err := client.validateAccessPoliciesWith(t.Context(), absent, 3, 0)
+	if err == nil {
+		t.Fatal("validateAccessPoliciesWith() accepted a policy ID the successful listing did not contain")
+	}
+	if !strings.Contains(err.Error(), configured) {
+		t.Errorf("validateAccessPoliciesWith() error = %q, want it to name %q", err, configured)
+	}
+	if calls != 1 {
+		t.Errorf("validateAccessPoliciesWith() listed %d time(s) for a successful call, want 1", calls)
+	}
+
+	// present, so startup proceeds
+	present := func(context.Context) ([]cloudflare.AccessPolicy, error) {
+		return []cloudflare.AccessPolicy{{ID: configured}}, nil
+	}
+	if err := client.validateAccessPoliciesWith(t.Context(), present, 3, 0); err != nil {
+		t.Errorf("validateAccessPoliciesWith() = %v, want nil for a configured policy the account has", err)
+	}
+}
+
+func Test_validateAccessPoliciesListingErrors(t *testing.T) {
+	const configured = "8b1c0d7e-4f2a-4b6c-9d31-0a5e7c2f1b40"
+	client := accessTestClient(exposure.AccessDefaults{Enabled: true, Policies: []string{configured}})
+
+	// a listing that never succeeds must not take the whole cluster's DNS down:
+	// the startup check is an early warning, the plan time quarantine and the
+	// create time failure are the actual safety mechanisms
+	calls := 0
+	failing := func(context.Context) ([]cloudflare.AccessPolicy, error) {
+		calls++
+		return nil, errors.New("HTTP status 403: Actor does not have permission to read access policies")
+	}
+	if err := client.validateAccessPoliciesWith(t.Context(), failing, 3, 0); err != nil {
+		t.Errorf("validateAccessPoliciesWith() = %v, want nil so the controller starts with the policy IDs unverified", err)
+	}
+	if calls != 3 {
+		t.Errorf("validateAccessPoliciesWith() made %d attempt(s), want 3", calls)
+	}
+
+	// a transient error is ridden out, and the recovered listing is still
+	// validated rather than waved through
+	calls = 0
+	flaky := func(context.Context) ([]cloudflare.AccessPolicy, error) {
+		calls++
+		if calls < 3 {
+			return nil, errors.New("HTTP status 502: Bad Gateway")
+		}
+		return []cloudflare.AccessPolicy{{ID: "3f0b5a11-8c47-4d2e-9a63-1e8f4c7d2a05"}}, nil
+	}
+	if err := client.validateAccessPoliciesWith(t.Context(), flaky, 3, 0); err == nil {
+		t.Error("validateAccessPoliciesWith() accepted an absent policy ID after the listing recovered")
+	}
+	if calls != 3 {
+		t.Errorf("validateAccessPoliciesWith() made %d attempt(s) before the listing recovered, want 3", calls)
+	}
+
+	// nothing configured means nothing to verify, and no API call at all
+	quiet := accessTestClient(exposure.AccessDefaults{Enabled: true})
+	if reachedCloudflare(func() error { return quiet.validateAccessPolicies(t.Context()) }) {
+		t.Error("validateAccessPolicies() called Cloudflare with no policies configured")
+	}
+}
+
 func Test_zoneForHostname(t *testing.T) {
 	// a subdomain zone alongside its parent, the shape that made the removal
 	// signal lie: both zones suffix match, and only one of them holds the record
@@ -407,6 +483,49 @@ func Test_zoneForHostname(t *testing.T) {
 	okHostname, zoneHostname := zoneForHostname(item.Hostname, zones)
 	if okExposure != okHostname || zoneExposure != zoneHostname {
 		t.Errorf("zoneBelongedByExposure() = %v %q, want the same zone as zoneForHostname(), %v %q", okExposure, zoneExposure, okHostname, zoneHostname)
+	}
+}
+
+func Test_zoneForHostnameLongestSuffixWins(t *testing.T) {
+	const hostname = "a.sub.example.com"
+
+	// the case ListZones order used to decide: the parent zone is listed first
+	// and also suffix matches, but Cloudflare answers the name from the child
+	// zone, which is where the record lives
+	parentFirst := []string{"example.com", "sub.example.com"}
+	if ok, zone := zoneForHostname(hostname, parentFirst); !ok || zone != "sub.example.com" {
+		t.Errorf("zoneForHostname() with the parent listed first = %v %q, want true sub.example.com", ok, zone)
+	}
+
+	// and the answer must not depend on the order at all. deep.sub.example.com
+	// is a longer zone name that does not cover the hostname, so a match has to
+	// stay a match, not merely the longest name in the list
+	for _, zones := range [][]string{
+		{"sub.example.com", "example.com"},
+		{"example.com", "sub.example.com"},
+		{"example.com", "deep.sub.example.com", "sub.example.com"},
+		{"deep.sub.example.com", "sub.example.com", "example.com"},
+	} {
+		if ok, zone := zoneForHostname(hostname, zones); !ok || zone != "sub.example.com" {
+			t.Errorf("zoneForHostname(%q, %v) = %v %q, want true sub.example.com", hostname, zones, ok, zone)
+		}
+	}
+
+	// a hostname under the deeper zone resolves to the deeper zone, whichever
+	// way round the three are listed
+	if ok, zone := zoneForHostname("x.deep.sub.example.com", []string{"example.com", "sub.example.com", "deep.sub.example.com"}); !ok || zone != "deep.sub.example.com" {
+		t.Errorf("zoneForHostname() = %v %q, want true deep.sub.example.com", ok, zone)
+	}
+
+	// one zone, and no zone, behave exactly as before
+	if ok, zone := zoneForHostname(hostname, []string{"example.com"}); !ok || zone != "example.com" {
+		t.Errorf("zoneForHostname() with a single zone = %v %q, want true example.com", ok, zone)
+	}
+	if ok, zone := zoneForHostname("app.elsewhere.com", parentFirst); ok || zone != "" {
+		t.Errorf("zoneForHostname() = %v %q, want false \"\" for a hostname outside every zone", ok, zone)
+	}
+	if ok, zone := zoneForHostname(hostname, nil); ok || zone != "" {
+		t.Errorf("zoneForHostname() with no zones = %v %q, want false \"\"", ok, zone)
 	}
 }
 

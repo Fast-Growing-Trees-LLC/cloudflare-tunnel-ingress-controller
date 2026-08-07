@@ -104,7 +104,9 @@ access:
   # annotating a hostname that is already serving traffic. Create the policies in the
   # Cloudflare Zero Trust dashboard first: the controller attaches policies, it
   # never creates or edits them. The IDs are validated once at startup and the
-  # controller refuses to start if any of them does not exist. Overridden per
+  # controller refuses to start if the policy listing comes back without one of
+  # them; if the listing itself fails the controller warns and starts anyway,
+  # leaving them unverified. Overridden per
   # ingress by the
   # cloudflare-tunnel-ingress-controller.strrl.dev/access-policies annotation.
   policies: []

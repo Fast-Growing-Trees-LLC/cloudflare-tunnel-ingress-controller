@@ -122,6 +122,8 @@ A `CloudflareSyncFailed` event whose message contains `list access applications`
 
 A controller pod crash-looping with a policy ID in its message means that ID is not a reusable policy on this account. The controller validates `access.policies` once at startup rather than discovering the problem on a create.
 
+A startup warning naming unverified policy IDs means the opposite: the policy listing itself failed, so the controller could not check them and started anyway rather than taking DNS down for the whole cluster on a read error. `cloudflare_tunnel_ingress_controller_cloudflare_api_errors_total{operation="list_access_policies"}` counts the failed attempts. The usual cause is an API token without read access to Access policies; a genuinely bad ID still surfaces, as a failed application create rather than at startup.
+
 If the hostname is exposed but no Access prompt appears, look for the `not managed by this controller` warning in the controller log. It means an application already exists for that hostname and this controller is leaving it untouched, so nothing you change on the Ingress affects who can reach it.
 
 ## A hostname stayed public after turning Access on
