@@ -74,7 +74,7 @@ The resulting tunnel rule sends `postgres.example.com` to `tcp://postgres.databa
 
 ## Connect from a client
 
-Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on every client device that will connect. These commands assume that the hostname is protected by a Cloudflare Access application and policy.
+Install [`cloudflared`](https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/downloads/) on every client device that will connect. These commands assume that the hostname is protected by a Cloudflare Access application and policy, which you can have the controller manage by following [Protect a hostname with Cloudflare Access](/how-to/protect-with-cloudflare-access/).
 
 ```mermaid
 flowchart LR

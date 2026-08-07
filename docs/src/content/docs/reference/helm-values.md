@@ -18,6 +18,22 @@ For the complete and up-to-date list of all available Helm values, refer to the 
 | `ingressClass.name`           | `cloudflare-tunnel` | Name of the `IngressClass` created and watched by the controller.                          |
 | `ingressClass.isDefaultClass` | `false`             | Set to `true` only if Cloudflare Tunnel should handle ingresses without an explicit class. |
 
+## Cloudflare Access
+
+These values control the optional Cloudflare Access integration described in [Protect a hostname with Cloudflare Access](/how-to/protect-with-cloudflare-access/). Enabling it requires the API token to additionally carry the `Account:Access: Apps and Policies:Edit` permission. While `access.enabled` is `false` the whole block is inert: the controller makes no Access API calls, and an ingress that asks for Access is not exposed. Setting `access.resyncInterval` to `0` means an Access application deleted outside Kubernetes leaves its hostname public until something in the cluster changes.
+
+Configure a policy before any ingress asks for Access. An application with no policy denies everyone, so rather than create one the controller withholds the hostname: it removes the tunnel rule and deletes the controller-owned DNS records, which takes a hostname that is currently serving traffic offline. There is no Ingress event for it, only a controller log warning and a non-zero `cloudflare_tunnel_ingress_controller_access_quarantined_hostnames`. Leaving `access.policies` empty is safe only while every Access-annotated ingress sets `access-policies` itself.
+
+| Value                    | Default | Notes                                                                                                                                                                                                                                                                                             |
+| ------------------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `access.enabled`         | `false` | Manage Access applications for ingresses carrying the `access` annotation.                                                                                                                                                                                                                        |
+| `access.policies`        | `[]`    | Reusable Access policy IDs (UUIDs, not policy names) attached to every managed application, in ascending order of precedence. Create them in the Zero Trust dashboard first: the controller attaches policies, it never creates or edits them. Validated once at startup, an unknown ID stops the controller from starting. An Access-annotated hostname left with no policy is taken offline rather than published unprotected. |
+| `access.allowedIdps`     | `[]`    | Access identity provider IDs. Empty lets Cloudflare apply the organisation default. Emptying this value later does not clear the identity providers on applications that already have them, the Cloudflare API has no way to express that.                                                        |
+| `access.sessionDuration` | `""`    | Access session duration as a non-negative Go duration string, such as `24h`, `1h30m`, or `0s` to re-authenticate on every request. Empty lets Cloudflare apply its own default. As with `allowedIdps`, emptying it later does not reset the duration on applications that already have one. |
+| `access.resyncInterval`  | `10m`   | How often each controlled Ingress is reconciled again so an application deleted outside Kubernetes is recreated. `0` disables the resync.                                                                                                                                                         |
+
+Each value is a default that an ingress can override with the matching `access-*` annotation. See [Ingress annotations](/reference/ingress-annotations/).
+
 ## Controller pods
 
 These values apply to the controller Deployment, not the managed cloudflared connector Deployment.

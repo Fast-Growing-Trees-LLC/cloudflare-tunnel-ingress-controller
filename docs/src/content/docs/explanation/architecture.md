@@ -50,6 +50,37 @@ With `disable-dns-management: "true"`, only DNS responsibility changes. The Expo
 
 See the [Ingress annotations reference](/reference/ingress-annotations/) for annotation syntax and related origin settings.
 
+## Access applications and ownership
+
+```mermaid
+flowchart TB
+    Annotated["access = true"] --> Plan["Plan Access applications"]
+    Plan --> Create["Create application<br/>dash.example.com"]
+    Create --> Tags["Tags: ctic-managed<br/>and ctic-tunnel-[tunnel name]"]
+    Create --> Publish["Then publish the DNS record"]
+
+    Withdrawn["Hostname no longer exposed"] --> RuleGone["Tunnel rule removed"]
+    RuleGone --> RecordGone{"CNAME confirmed gone?"}
+    RecordGone -->|"Yes"| Delete["Delete the application"]
+    RecordGone -->|"No"| Retain["Keep the application<br/>and warn"]
+
+    Unowned["Application without these tags"] --> Untouched["Never updated, never deleted"]
+```
+
+Access applications belong to the Cloudflare account rather than to a zone, so this path involves no zone lookup and no zone grouping. One application covers one hostname.
+
+An application has no comment field, so ownership cannot ride on a record the way DNS ownership rides on the `_ctic_managed` TXT record. It rides on two tags instead: a fixed `ctic-managed` tag and a tag derived from the tunnel name. The tunnel _name_ is the same identity the DNS ownership record uses, and the controller reuses a tunnel by name, so a tunnel deleted and recreated under the same name keeps its applications instead of orphaning every one of them. Scoping the second tag to the tunnel is also what keeps two clusters that share a Cloudflare account from pruning each other's applications.
+
+The sync is deliberately split around the DNS step. An application is created before the DNS record publishes its hostname, and it is deleted only after the tunnel rule is gone and, for a hostname that is no longer exposed at all, only after the DNS record is confirmed gone. A DNS step that returns success is not the same thing as a record that is absent: when another system has repointed a hostname the controller preserves that record deliberately. The DNS step therefore reports back which hostnames it actually cleared, and an application whose hostname is not in that set is retained with a warning rather than removed from something still being served.
+
+What that ordering buys is one-directional, and it is worth being precise about what it does not buy. An interrupted sync can leave an application protecting nothing, and never a hostname that _this controller published_ without the application its Ingress asked for. There are two states it does not rule out, and neither is a bug in the ordering.
+
+The first is an application deleted _outside_ Kubernetes. A deletion in the Cloudflare dashboard changes nothing an event-driven controller can see, so the hostname stays public and unprotected until something reconciles. That is why the controller re-checks its applications on a timer, `access.resyncInterval`. The timer, not the ordering, is what bounds how long a hostname can be public after its application is deleted elsewhere, and setting the interval to `0` removes the bound entirely.
+
+The second is the hostname that was already public before you asked for Access. Turning Access on for a hostname the controller published earlier does not withdraw anything: the sync plans the Access work first and returns on failure before it reaches DNS, so if the Access step keeps failing, for example because the token has no Access permission yet or the account cannot be listed, the tunnel rule and the CNAME from the earlier successful sync both stay exactly where they are. The hostname keeps serving, publicly, with no application in front of it, for as long as the failure lasts. `access.resyncInterval` does not bound this one, because the resync re-enters the same failing sync. What you get instead is a `CloudflareSyncFailed` event on the Ingress, `cloudflare_tunnel_ingress_controller_cloudflare_api_errors_total` climbing, and `last_successful_sync_timestamp_seconds` going stale. Retrofitting Access onto a live hostname is therefore the one flow to watch after applying, rather than assume.
+
+One behaviour diverges from DNS on purpose. Where the DNS path adopts and overwrites a CNAME it does not own, the Access path never touches an application it did not tag: silently rewriting the policy set of a hand-made application changes who can reach a production hostname, and an authorisation control is not safe to adopt. The consequence is worth an alert rather than a shrug, because it means the controller is not enforcing Access on that hostname at all. See [Monitor the controller and cloudflared](/how-to/monitoring/) for the metric.
+
 ## Keeping cloudflared running
 
 `ControlledCloudflaredConnector` is a separate reconciliation loop. After this controller instance becomes the elected leader, the loop runs every 10 seconds. Each pass fetches the tunnel token and compares the managed Kubernetes Secret and Deployment with the desired connector configuration.

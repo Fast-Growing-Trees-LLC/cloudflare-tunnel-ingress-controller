@@ -27,6 +27,26 @@ curl http://127.0.0.1:8080/metrics
 
 Create your own Service and scrape configuration if Prometheus must collect controller metrics continuously.
 
+## Watch the Cloudflare Access metrics
+
+These series only move when [Cloudflare Access](/how-to/protect-with-cloudflare-access/) is enabled. Every name below carries the `cloudflare_tunnel_ingress_controller_` prefix.
+
+| Metric                                                               | Type    | Meaning                                                                                                      |
+| -------------------------------------------------------------------- | ------- | ------------------------------------------------------------------------------------------------------------ |
+| `access_application_operations_total{operation="create"}`            | counter | Access applications created.                                                                                 |
+| `access_application_operations_total{operation="update"}`            | counter | Managed applications reconciled back to the desired policies, identity providers, session duration, or tags. |
+| `access_application_operations_total{operation="delete"}`            | counter | Managed applications removed because the hostname was withdrawn or opted out.                                |
+| `access_application_operations_total{operation="skipped_unmanaged"}` | counter | An application already existed for a hostname and this controller does not own it, so it was left untouched. |
+| `access_application_operations_total{operation="retained"}`          | counter | A withdrawn hostname's application was kept because its DNS record could not be confirmed gone.              |
+| `access_applications_managed`                                        | gauge   | Applications this controller currently owns. Set only while Access is enabled.                               |
+| `access_quarantined_hostnames`                                       | gauge   | Hostnames deliberately left unrouted because their Access configuration is unusable.                         |
+
+`cloudflare_api_errors_total` gains the `list_access_applications`, `create_access_application`, `update_access_application`, `delete_access_application`, `list_access_tags`, `create_access_tag`, and `list_access_policies` values for its `operation` label.
+
+Two of these are worth an alert rather than a dashboard, because each means a hostname's Access posture is not what its Ingress asked for. A non-zero `access_application_operations_total{operation="skipped_unmanaged"}` means another party owns the application and this controller is not enforcing Access on that hostname. A non-zero `access_quarantined_hostnames` means the controller took a hostname down rather than publish it unprotected.
+
+A stale `last_successful_sync_timestamp_seconds` is also what a missing Access token permission looks like from Prometheus while Access is in use: the sync fails before it writes anything, so nothing else changes. An alert on that timestamp covers the case for free.
+
 ## Inspect cloudflared metrics
 
 Every managed `cloudflared` process listens on `0.0.0.0:44483`. The chart always creates the `controlled-cloudflared-connector-headless` Service with a `metrics` port at `44483`.
