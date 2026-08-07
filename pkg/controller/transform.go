@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -51,7 +52,10 @@ func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient c
 			continue
 		}
 
-		hostname := rule.Host
+		// Kubernetes does not normalise rule.Host while Cloudflare returns
+		// hostnames lowercased, normalise once at the source so the DNS path and
+		// the Access path join on the same key
+		hostname := strings.ToLower(rule.Host)
 		scheme := "http"
 
 		if backendProtocol, ok := getAnnotation(ingress.Annotations, AnnotationBackendProtocol); ok {
@@ -91,6 +95,20 @@ func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient c
 		originRequest, err := parseOriginRequestSettings(ingress.Annotations, scheme)
 		if err != nil {
 			return nil, err
+		}
+
+		access, err := parseAccessSettings(ingress, hostname)
+		if err != nil {
+			return nil, err
+		}
+
+		accessEnabled := access != nil && access.Enabled
+		var accessPolicies, accessAllowedIdps []string
+		var accessSessionDuration *string
+		if accessEnabled {
+			accessPolicies = access.Policies
+			accessAllowedIdps = access.AllowedIdps
+			accessSessionDuration = access.SessionDuration
 		}
 
 		var proxySSLVerifyEnabled *bool
@@ -160,6 +178,10 @@ func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient c
 				HTTPHostHeader:         httpHostHeader,
 				OriginServerName:       originServerName,
 				DisableDNSManagement:   disableDNSManagement,
+				AccessEnabled:          accessEnabled,
+				AccessPolicies:         accessPolicies,
+				AccessAllowedIdps:      accessAllowedIdps,
+				AccessSessionDuration:  accessSessionDuration,
 				ConnectTimeout:         originRequest.ConnectTimeout,
 				TLSTimeout:             originRequest.TLSTimeout,
 				TCPKeepAlive:           originRequest.TCPKeepAlive,
@@ -271,6 +293,140 @@ func parseOriginRequestSettings(annotations map[string]string, scheme string) (o
 	}
 
 	return settings, nil
+}
+
+// accessSettings carries the parsed Cloudflare Access annotations, they apply
+// to every rule generated from the ingress.
+type accessSettings struct {
+	Enabled         bool
+	Policies        []string
+	AllowedIdps     []string
+	SessionDuration *string
+}
+
+// validAccessSessionDuration reports whether the value is an Access session
+// duration this controller will forward.
+//
+// parseDurationAnnotation is deliberately not reused: it rejects non positive
+// and sub second values, while "0s" - re authenticate on every request - is
+// legitimate and security relevant here. The grammar is otherwise Go's, the
+// same one the origin request annotations document, so multi unit spellings
+// like "1h30m" - which is what Cloudflare's own API documentation uses - are
+// accepted. Beyond being a non negative duration the value is passed through
+// opaquely; Cloudflare is the authority on it.
+func validAccessSessionDuration(value string) bool {
+	duration, err := time.ParseDuration(value)
+	return err == nil && duration >= 0
+}
+
+// parseAccessSettings parses the Cloudflare Access annotations at rule scope.
+// It returns nil when the access annotation is absent, so an ingress without it
+// keeps today's behaviour exactly. host is required because two of the
+// validations are host dependent.
+func parseAccessSettings(ingress networkingv1.Ingress, host string) (*accessSettings, error) {
+	value, ok := getAnnotation(ingress.Annotations, AnnotationAccess)
+	if !ok {
+		// settings that would silently do nothing are a security surprise
+		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration} {
+			if _, present := getAnnotation(ingress.Annotations, key); present {
+				return nil, errors.Errorf(
+					"annotation %s requires %s: \"%s\"",
+					key, AnnotationAccess, AnnotationAccessTrue,
+				)
+			}
+		}
+		return nil, nil
+	}
+
+	settings := accessSettings{}
+	switch value {
+	case AnnotationAccessTrue:
+		settings.Enabled = true
+	case AnnotationAccessFalse:
+		settings.Enabled = false
+	default:
+		return nil, errors.Errorf(
+			"invalid value for annotation %s, available values: \"%s\" or \"%s\"",
+			AnnotationAccess,
+			AnnotationAccessTrue,
+			AnnotationAccessFalse,
+		)
+	}
+
+	if !settings.Enabled {
+		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration} {
+			if _, present := getAnnotation(ingress.Annotations, key); present {
+				return nil, errors.Errorf(
+					"annotation %s requires %s: \"%s\"",
+					key, AnnotationAccess, AnnotationAccessTrue,
+				)
+			}
+		}
+		return &settings, nil
+	}
+
+	// removing an Access application is gated on a positive "the DNS record is
+	// gone" signal, and there is none for a record the controller does not own
+	if dns, present := getAnnotation(ingress.Annotations, AnnotationDisableDNSManagement); present && dns == AnnotationDisableDNSManagementTrue {
+		return nil, errors.Errorf(
+			"annotation %s cannot be combined with %s: the controller cannot confirm the DNS record is gone before removing the Access application",
+			AnnotationAccess, AnnotationDisableDNSManagement,
+		)
+	}
+
+	// Cloudflare validates wildcard application domains differently and gates
+	// them by plan, an application whose blast radius the operator did not
+	// reason about must not be created silently
+	if strings.HasPrefix(host, "*.") {
+		return nil, errors.Errorf(
+			"annotation %s is not supported on a wildcard host %s; create the Access application for the wildcard domain manually",
+			AnnotationAccess, host,
+		)
+	}
+
+	var err error
+	if settings.Policies, err = parseCSVAnnotation(ingress, AnnotationAccessPolicies); err != nil {
+		return nil, err
+	}
+	if settings.AllowedIdps, err = parseCSVAnnotation(ingress, AnnotationAccessAllowedIdps); err != nil {
+		return nil, err
+	}
+	if duration, present := getAnnotation(ingress.Annotations, AnnotationAccessSessionDuration); present {
+		if !validAccessSessionDuration(duration) {
+			return nil, errors.Errorf(
+				"invalid value %q for annotation %s, expect a non negative Go duration string like \"24h\", \"1h30m\" or \"0s\"",
+				duration, AnnotationAccessSessionDuration,
+			)
+		}
+		settings.SessionDuration = ptr.To(duration)
+	}
+
+	return &settings, nil
+}
+
+// parseCSVAnnotation splits a comma separated annotation into trimmed items.
+// It returns nil when the annotation is absent, and an error when the
+// annotation is present but empty or contains an empty element.
+func parseCSVAnnotation(ingress networkingv1.Ingress, key string) ([]string, error) {
+	value, ok := getAnnotation(ingress.Annotations, key)
+	if !ok {
+		return nil, nil
+	}
+	// present but empty is not "clear the controller default": an Access
+	// application with no policies denies everyone, so a typo must not silently
+	// produce a locked out hostname
+	var items []string
+	for _, item := range strings.Split(value, ",") {
+		trimmed := strings.TrimSpace(item)
+		if trimmed == "" {
+			return nil, errors.Errorf(
+				"invalid value %q for annotation %s, expect a comma separated list with no empty elements",
+				value, key,
+			)
+		}
+		items = append(items, trimmed)
+	}
+	return items, nil
 }
 
 func parseBoolAnnotation(annotations map[string]string, key string) (*bool, error) {

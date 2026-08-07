@@ -858,4 +858,105 @@ var _ = Describe("transform ingress to exposure", func() {
 		Expect(exposure[0].ProxySSLVerifyEnabled).ShouldNot(BeNil())
 		Expect(*exposure[0].ProxySSLVerifyEnabled).Should(BeTrue())
 	})
+
+	It("should resolve the cloudflare access annotations onto every path", func() {
+		// prepare
+		By("preparing namespace")
+		namespaceFixtures := fixtures.NewKubernetesNamespaceFixtures(IntegrationTestNamespace, kubeClient)
+		ns, err := namespaceFixtures.Start(ctx)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		defer func() {
+			By("cleaning up namespace")
+			err := namespaceFixtures.Stop(ctx)
+			Expect(err).ShouldNot(HaveOccurred())
+		}()
+
+		By("preparing service")
+		service := v1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:    ns,
+				GenerateName: "test-service-",
+			},
+			Spec: v1.ServiceSpec{
+				ClusterIP: "10.0.0.31",
+				Ports: []v1.ServicePort{
+					{
+						Name:     "http",
+						Protocol: v1.ProtocolTCP,
+						Port:     2333,
+						TargetPort: intstr.IntOrString{
+							Type:   intstr.Int,
+							IntVal: 8080,
+						},
+					},
+				},
+			},
+		}
+		err = kubeClient.Create(ctx, &service)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		By("preparing ingress")
+		backend := networkingv1.IngressBackend{
+			Service: &networkingv1.IngressServiceBackend{
+				Name: service.Name,
+				Port: networkingv1.ServiceBackendPort{
+					Number: 2333,
+				},
+			},
+		}
+		ingress := networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Namespace:    ns,
+				GenerateName: "test-ingress-",
+				Annotations: map[string]string{
+					"cloudflare-tunnel-ingress-controller.strrl.dev/access":                  "true",
+					"cloudflare-tunnel-ingress-controller.strrl.dev/access-policies":         "policy-a, policy-b",
+					"cloudflare-tunnel-ingress-controller.strrl.dev/access-allowed-idps":     "idp-a,idp-b",
+					"cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration": "24h",
+				},
+			},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{
+					{
+						// the API server rejects a mixed case host, so the
+						// lowercasing itself is covered by the unit tests
+						Host: "ops-bot.example.com",
+						IngressRuleValue: networkingv1.IngressRuleValue{
+							HTTP: &networkingv1.HTTPIngressRuleValue{
+								Paths: []networkingv1.HTTPIngressPath{
+									{
+										Path:     "/",
+										PathType: &pathTypePrefix,
+										Backend:  backend,
+									},
+									{
+										Path:     "/admin",
+										PathType: &pathTypePrefix,
+										Backend:  backend,
+									},
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+		err = kubeClient.Create(ctx, &ingress)
+		Expect(err).ShouldNot(HaveOccurred())
+
+		By("transforming ingress to exposure")
+		exposure, err := controller.FromIngressToExposure(ctx, logger, kubeClient, recorder, ingress, testClusterDomain)
+		Expect(err).ShouldNot(HaveOccurred())
+		Expect(exposure).Should(HaveLen(2))
+		for i, path := range []string{"/", "/admin"} {
+			Expect(exposure[i].PathPrefix).Should(Equal(path))
+			Expect(exposure[i].Hostname).Should(Equal("ops-bot.example.com"))
+			Expect(exposure[i].AccessEnabled).Should(BeTrue())
+			Expect(exposure[i].AccessPolicies).Should(Equal([]string{"policy-a", "policy-b"}))
+			Expect(exposure[i].AccessAllowedIdps).Should(Equal([]string{"idp-a", "idp-b"}))
+			Expect(exposure[i].AccessSessionDuration).ShouldNot(BeNil())
+			Expect(*exposure[i].AccessSessionDuration).Should(Equal("24h"))
+		}
+	})
 })
