@@ -25,6 +25,11 @@ const (
 	EventReasonTransformFailed = "TransformFailed"
 	EventReasonSyncFailed      = "CloudflareSyncFailed"
 	EventReasonSynced          = "CloudflareSynced"
+	// EventReasonAccessNotEnabled is emitted on an ingress that requests
+	// Cloudflare Access while the controller cannot provide it. The ingress is
+	// not exposed at all, so the hostname goes dark rather than being published
+	// without the protection its annotations asked for.
+	EventReasonAccessNotEnabled = "AccessNotEnabled"
 )
 
 func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient client.Client, recorder record.EventRecorder, ingress networkingv1.Ingress, clusterDomain string) ([]exposure.Exposure, error) {

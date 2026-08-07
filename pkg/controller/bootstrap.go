@@ -2,6 +2,7 @@ package controller
 
 import (
 	cloudflarecontroller "github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/cloudflare-controller"
+	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/exposure"
 	"github.com/go-logr/logr"
 	networkingv1 "k8s.io/api/networking/v1"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -12,11 +13,13 @@ type IngressControllerOptions struct {
 	IngressClassName    string
 	ControllerClassName string
 	ClusterDomain       string
-	CFTunnelClient      *cloudflarecontroller.TunnelClient
+	CFTunnelClient      cloudflarecontroller.TunnelClientInterface
+	// Access is the same value the tunnel client was built with
+	Access exposure.AccessDefaults
 }
 
 func RegisterIngressController(logger logr.Logger, mgr manager.Manager, options IngressControllerOptions) error {
-	controller := NewIngressController(logger.WithName("ingress-controller"), mgr.GetClient(), mgr.GetEventRecorderFor("cloudflare-tunnel-ingress-controller"), options.IngressClassName, options.ControllerClassName, options.ClusterDomain, options.CFTunnelClient)
+	controller := NewIngressController(logger.WithName("ingress-controller"), mgr.GetClient(), mgr.GetEventRecorderFor("cloudflare-tunnel-ingress-controller"), options.IngressClassName, options.ControllerClassName, options.ClusterDomain, options.CFTunnelClient, options.Access)
 	err := builder.
 		ControllerManagedBy(mgr).
 		For(&networkingv1.Ingress{}).
