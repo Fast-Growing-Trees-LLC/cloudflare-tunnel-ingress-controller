@@ -56,7 +56,7 @@ See the [Ingress annotations reference](/reference/ingress-annotations/) for ann
 flowchart TB
     Annotated["access = true"] --> Plan["Plan Access applications"]
     Plan --> Create["Create application<br/>dash.example.com"]
-    Create --> Tags["Tags: ctic-managed<br/>and ctic-tunnel-[tunnel name]"]
+    Create --> Tags["Tags: ctic-managed<br/>and ctic-tunnel-[digest of tunnel name]"]
     Create --> Publish["Then publish the DNS record"]
 
     Withdrawn["Hostname no longer exposed"] --> RuleGone["Tunnel rule removed"]
@@ -69,7 +69,7 @@ flowchart TB
 
 Access applications belong to the Cloudflare account rather than to a zone, so this path involves no zone lookup and no zone grouping. One application covers one hostname.
 
-An application has no comment field, so ownership cannot ride on a record the way DNS ownership rides on the `_ctic_managed` TXT record. It rides on two tags instead: a fixed `ctic-managed` tag and a tag derived from the tunnel name. The tunnel _name_ is the same identity the DNS ownership record uses, and the controller reuses a tunnel by name, so a tunnel deleted and recreated under the same name keeps its applications instead of orphaning every one of them. Scoping the second tag to the tunnel is also what keeps two clusters that share a Cloudflare account from pruning each other's applications.
+An application has no comment field, so ownership cannot ride on a record the way DNS ownership rides on the `_ctic_managed` TXT record. It rides on two tags instead: a fixed `ctic-managed` tag and a `ctic-tunnel-<digest>` tag derived from the tunnel name. The digest, rather than the name itself, is what the tag carries: Cloudflare caps a tag name at 35 characters, and a tunnel name is operator input of unbounded length, so a tag with the name in it is a tag whose length the operator controls. The tunnel _name_ is the same identity the DNS ownership record uses, and the controller reuses a tunnel by name, so a tunnel deleted and recreated under the same name keeps its applications instead of orphaning every one of them. Scoping the second tag to the tunnel is also what keeps two clusters that share a Cloudflare account from pruning each other's applications.
 
 The sync is deliberately split around the DNS step. An application is created before the DNS record publishes its hostname, and it is deleted only after the tunnel rule is gone and, for a hostname that is no longer exposed at all, only after the DNS record is confirmed gone. A DNS step that returns success is not the same thing as a record that is absent: when another system has repointed a hostname the controller preserves that record deliberately. The DNS step therefore reports back which hostnames it actually cleared, and an application whose hostname is not in that set is retained with a warning rather than removed from something still being served.
 

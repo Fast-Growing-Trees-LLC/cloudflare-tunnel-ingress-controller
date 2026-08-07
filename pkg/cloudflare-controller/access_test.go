@@ -3,6 +3,7 @@ package cloudflarecontroller
 import (
 	"fmt"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/exposure"
@@ -675,7 +676,7 @@ func Test_syncAccessApplications(t *testing.T) {
 						Tags: []string{
 							ManagedAccessAppTag,
 							fmt.Sprintf(ManagedAccessAppTunnelTagFormat, WhateverTunnelId),
-							fmt.Sprintf(ManagedAccessAppTunnelTagFormat, sanitiseTagName(WhateverTunnelName)),
+							tunnelOwnershipTag(WhateverTunnelName),
 						},
 					},
 				},
@@ -1096,7 +1097,10 @@ func Test_syncAccessApplications(t *testing.T) {
 	}
 }
 
-func Test_sanitiseTagName(t *testing.T) {
+func Test_tunnelTagBody(t *testing.T) {
+	// the golden values pin the scheme: it has to survive a restart, a second
+	// replica and an upgrade, so it may not change without a deliberate
+	// migration of every application already tagged
 	tests := []struct {
 		name       string
 		tunnelName string
@@ -1105,56 +1109,129 @@ func Test_sanitiseTagName(t *testing.T) {
 		{
 			name:       "already clean",
 			tunnelName: "tunnel-in-test",
-			want:       "tunnel-in-test-bef76a57",
+			want:       "bef76a573d3fc083",
 		},
 		{
-			name:       "mixed case is lowered",
+			name:       "case only rename is a different tunnel",
 			tunnelName: "Tunnel-In-Test",
-			want:       "tunnel-in-test-fd08a1bf",
+			want:       "fd08a1bfb7ca2937",
 		},
 		{
-			name:       "dots and underscores are replaced",
+			name:       "dots and underscores need no sanitisation",
 			tunnelName: "eks_sandbox.example",
-			want:       "eks-sandbox-example-c8310ee2",
+			want:       "c8310ee280493440",
 		},
 		{
-			name:       "over long names are truncated but stay distinct",
+			name:       "over long names are not truncated into a collision",
 			tunnelName: "cloudflare-tunnel-ingress-controller-sandbox",
-			want:       "cloudflare-tunnel-ingres-16887ecd",
+			want:       "16887ecd73e1be76",
+		},
+		{
+			name:       "a 22 character name, the shape that hit Cloudflare error 12130",
+			tunnelName: "tunnel-sandbox-cluster",
+			want:       "f77e289b286ce760",
 		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := sanitiseTagName(tt.tunnelName); got != tt.want {
-				t.Errorf("sanitiseTagName(%q) = %v, want %v", tt.tunnelName, got, tt.want)
+			if got := tunnelTagBody(tt.tunnelName); got != tt.want {
+				t.Errorf("tunnelTagBody(%q) = %v, want %v", tt.tunnelName, got, tt.want)
 			}
 		})
-	}
-
-	// two names that truncate to the same 24 characters must not collide
-	a := sanitiseTagName("cloudflare-tunnel-ingress-controller-sandbox")
-	b := sanitiseTagName("cloudflare-tunnel-ingress-controller-prod")
-	if a == b {
-		t.Errorf("sanitiseTagName collided for two distinct tunnel names: %v", a)
-	}
-
-	// the sanitisation is not case sensitive but the hash is, so a rename that
-	// only changes case still produces a distinct tag
-	if sanitiseTagName("tunnel-in-test") == sanitiseTagName("Tunnel-In-Test") {
-		t.Errorf("sanitiseTagName ignored a case only rename")
 	}
 }
 
 func Test_ownershipTags(t *testing.T) {
 	got := ownershipTags(WhateverTunnelName)
-	want := []string{"ctic-managed", "ctic-tunnel-tunnel-in-test-bef76a57"}
+	want := []string{"ctic-managed", "ctic-tunnel-bef76a573d3fc083"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("ownershipTags() = %v, want %v", got, want)
 	}
 }
 
+// Test_ownershipTagsFitCloudflareTagNameLimit is the regression guard for the
+// live failure that motivated the digest scheme: under the old format
+// "ctic-tunnel-" plus a 22 character tunnel name plus a hyphen and 8 hash
+// characters was 42 characters, and CreateAccessTag rejected it with error
+// 12130. The tunnel name is unbounded operator input, so the property has to
+// hold for adversarial names, not just for the ones anybody has tried.
+func Test_ownershipTagsFitCloudflareTagNameLimit(t *testing.T) {
+	tunnelNames := []string{
+		"",
+		"a",
+		// the length that produced the 42 character tag
+		"tunnel-sandbox-cluster",
+		// the longest label DNS allows
+		strings.Repeat("f", 63),
+		// every character sanitisation used to rewrite, plus multi byte runes
+		// that a byte-sliced truncation could have cut in half
+		"EKS_sandbox.example/v2:tunnel name with spaces!@#$%^&*()",
+		"トンネル-テスト-環境-クラスター-サンドボックス",
+		strings.Repeat("very.long_tunnel/name-", 40),
+	}
+
+	for _, tunnelName := range tunnelNames {
+		t.Run(fmt.Sprintf("%.32q", tunnelName), func(t *testing.T) {
+			for _, tag := range ownershipTags(tunnelName) {
+				if len(tag) > accessTagNameMaxLength {
+					t.Errorf("ownershipTags(%q) produced tag %q of length %d, Cloudflare rejects anything over %d (error 12130)",
+						tunnelName, tag, len(tag), accessTagNameMaxLength,
+					)
+				}
+			}
+		})
+	}
+}
+
+// Test_ownershipTagsAreDeterministicAndDistinct covers the other half of the
+// contract. The tag is the only ownership signal an Access application carries,
+// so a generator that is not stable orphans every application on restart, and
+// one that is not injective lets one cluster prune another's.
+func Test_ownershipTagsAreDeterministicAndDistinct(t *testing.T) {
+	tunnelNames := []string{
+		"",
+		"tunnel-in-test",
+		"Tunnel-In-Test",
+		"tunnel-sandbox-cluster",
+		"tunnel-prod-cluster",
+		"cloudflare-tunnel-ingress-controller-sandbox",
+		"cloudflare-tunnel-ingress-controller-prod",
+		// these three used to sanitise to the same 24 character prefix
+		"eks_sandbox.example",
+		"eks-sandbox-example",
+		"eks/sandbox/example",
+		strings.Repeat("f", 63),
+		strings.Repeat("f", 64),
+	}
+
+	seen := make(map[string]string, len(tunnelNames))
+	for _, tunnelName := range tunnelNames {
+		tags := ownershipTags(tunnelName)
+
+		if again := ownershipTags(tunnelName); !reflect.DeepEqual(tags, again) {
+			t.Fatalf("ownershipTags(%q) is not deterministic: %v then %v", tunnelName, tags, again)
+		}
+		if tags[0] != ManagedAccessAppTag {
+			t.Errorf("ownershipTags(%q)[0] = %v, want the fixed %v tag", tunnelName, tags[0], ManagedAccessAppTag)
+		}
+
+		tunnelTag := tags[1]
+		if owner, collided := seen[tunnelTag]; collided {
+			t.Errorf("ownershipTags collided: %q and %q both produce %v", owner, tunnelName, tunnelTag)
+		}
+		seen[tunnelTag] = tunnelName
+
+		// the generator and the comparer must stay one code path, or an
+		// application this controller just tagged reads back as unowned
+		app := cloudflare.AccessApplication{Tags: tags}
+		if !hasOwnershipTags(app, tunnelName, "") {
+			t.Errorf("hasOwnershipTags did not recognise the tags ownershipTags(%q) produced: %v", tunnelName, tags)
+		}
+	}
+}
+
 func Test_hasOwnershipTags(t *testing.T) {
-	nameFormTag := fmt.Sprintf(ManagedAccessAppTunnelTagFormat, sanitiseTagName(WhateverTunnelName))
+	nameFormTag := tunnelOwnershipTag(WhateverTunnelName)
 	idFormTag := fmt.Sprintf(ManagedAccessAppTunnelTagFormat, WhateverTunnelId)
 
 	tests := []struct {
@@ -1589,7 +1666,7 @@ func Test_malformedPolicyIDs(t *testing.T) {
 
 func Test_sawOwnedApplications(t *testing.T) {
 	owned := cloudflare.AccessApplication{ID: "app-1", Domain: WhateverHostname, Tags: ownedTags()}
-	foreign := cloudflare.AccessApplication{ID: "app-2", Domain: "other.example.com", Tags: []string{ManagedAccessAppTag, "ctic-tunnel-" + sanitiseTagName(WhateverOtherTunnelName)}}
+	foreign := cloudflare.AccessApplication{ID: "app-2", Domain: "other.example.com", Tags: []string{ManagedAccessAppTag, tunnelOwnershipTag(WhateverOtherTunnelName)}}
 
 	tests := []struct {
 		name         string

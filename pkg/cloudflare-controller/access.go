@@ -30,11 +30,28 @@ const ManagedAccessAppTag = "ctic-managed"
 // GetTunnelIdFromTunnelName recreates a tunnel whenever the name is not found.
 // An id keyed tag would leave every application carrying a stale tunnel tag
 // after any recreation: permanently unowned, never updated, never deleted.
+//
+// The body is a digest of the name rather than the name itself, see
+// accessTagNameMaxLength.
 const ManagedAccessAppTunnelTagFormat = "ctic-tunnel-%s"
 
-// accessTagNameMaxLength bounds the sanitised part of the tunnel tag, the tag
-// name character set and length limit are not documented by Cloudflare.
-const accessTagNameMaxLength = 24
+// accessTagNameMaxLength is Cloudflare's limit on an Access tag name. A longer
+// name is rejected by CreateAccessTag with
+// "access.api.error.invalid_request: name must be a maximum of 35 characters in
+// length (12130)", and ensureOwnershipTags runs before the first application
+// create, so one over long tag stalls Access and DNS reconciliation for every
+// ingress in the cluster on every pass.
+//
+// The tunnel name is operator input of unbounded length, so no amount of
+// truncating it is a bound the operator cannot beat. The tag carries a fixed
+// width digest instead: 12 characters of prefix plus accessTunnelTagHashLength
+// is 28, inside the limit for any tunnel name whatsoever.
+const accessTagNameMaxLength = 35
+
+// accessTunnelTagHashLength is how much of the tunnel name sha256 the tunnel
+// tag carries. 16 hex characters is 64 bits, which makes an accidental
+// collision between two tunnel names in one account implausible.
+const accessTunnelTagHashLength = 16
 
 // accessPolicyIDPattern is the UUID shape of a reusable Access policy ID.
 //
@@ -309,27 +326,25 @@ func resolveAccessSettings(e exposure.Exposure, d exposure.AccessDefaults) Acces
 	return spec
 }
 
-// sanitiseTagName renders a tunnel name as a tag body: lowercase, anything
-// outside [a-z0-9-] replaced, length bounded, and suffixed with a short hash so
-// two tunnel names that sanitise or truncate to the same string do not collide.
-func sanitiseTagName(tunnelName string) string {
-	var builder strings.Builder
-	for _, r := range strings.ToLower(tunnelName) {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
-			builder.WriteRune(r)
-		default:
-			builder.WriteRune('-')
-		}
-	}
-
-	sanitised := builder.String()
-	if len(sanitised) > accessTagNameMaxLength {
-		sanitised = sanitised[:accessTagNameMaxLength]
-	}
-
+// tunnelTagBody renders a tunnel name as the body of the tunnel ownership tag:
+// a fixed width hex prefix of its sha256.
+//
+// It is a pure function of the name, so it is stable across restarts, across
+// replicas and across controller versions; it is case sensitive, so a case only
+// rename is still a rename; and it is constant length, so the tag it feeds fits
+// accessTagNameMaxLength no matter what the tunnel is called. The name itself is
+// deliberately absent from the tag: the tag is an ownership token, not a label a
+// human reads, and embedding the name is what made the tag length unbounded.
+func tunnelTagBody(tunnelName string) string {
 	sum := sha256.Sum256([]byte(tunnelName))
-	return fmt.Sprintf("%s-%s", sanitised, hex.EncodeToString(sum[:])[:8])
+	return hex.EncodeToString(sum[:])[:accessTunnelTagHashLength]
+}
+
+// tunnelOwnershipTag is the single generator for the tunnel scoped tag. Every
+// site that writes one and every site that compares one goes through here, so
+// the plan, the tag creation and hasOwnershipTags cannot drift apart.
+func tunnelOwnershipTag(tunnelName string) string {
+	return fmt.Sprintf(ManagedAccessAppTunnelTagFormat, tunnelTagBody(tunnelName))
 }
 
 // ownershipTags returns the two tags every application this controller creates
@@ -337,7 +352,7 @@ func sanitiseTagName(tunnelName string) string {
 func ownershipTags(tunnelName string) []string {
 	return []string{
 		ManagedAccessAppTag,
-		fmt.Sprintf(ManagedAccessAppTunnelTagFormat, sanitiseTagName(tunnelName)),
+		tunnelOwnershipTag(tunnelName),
 	}
 }
 
@@ -349,7 +364,7 @@ func hasOwnershipTags(app cloudflare.AccessApplication, tunnelName string, tunne
 	if !slices.Contains(app.Tags, ManagedAccessAppTag) {
 		return false
 	}
-	if slices.Contains(app.Tags, fmt.Sprintf(ManagedAccessAppTunnelTagFormat, sanitiseTagName(tunnelName))) {
+	if slices.Contains(app.Tags, tunnelOwnershipTag(tunnelName)) {
 		return true
 	}
 	return tunnelId != "" && slices.Contains(app.Tags, fmt.Sprintf(ManagedAccessAppTunnelTagFormat, tunnelId))

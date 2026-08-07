@@ -124,7 +124,7 @@ A client without an Access session gets a `302` to `<YOUR_TEAM>.cloudflareaccess
 
 ## What the controller owns
 
-The controller creates one self-hosted application per opted-in hostname, named after the hostname and tagged with `ctic-managed` and a tag derived from the tunnel name. The tunnel name is what lets the controller recognise its own work after a tunnel is deleted and recreated, and it keeps two clusters that share one Cloudflare account from pruning each other's applications.
+The controller creates one self-hosted application per opted-in hostname, named after the hostname and tagged with `ctic-managed` and a `ctic-tunnel-<digest>` tag derived from the tunnel name. The tunnel name is what lets the controller recognise its own work after a tunnel is deleted and recreated, and it keeps two clusters that share one Cloudflare account from pruning each other's applications.
 
 The controller never modifies or deletes an application it did not create. If an application already exists for the hostname, it is left exactly as it is and the controller logs a warning: the hostname stays protected by your own configuration, but this controller is not enforcing Access on it, so nothing it does to the ingress changes who can reach that hostname.
 
