@@ -57,6 +57,10 @@ export default defineConfig({
               slug: "how-to/expose-non-http-services",
             },
             {
+              label: "Protect a Hostname with Cloudflare Access",
+              slug: "how-to/protect-with-cloudflare-access",
+            },
+            {
               label: "Use an External DNS System",
               slug: "how-to/use-with-external-dns",
             },

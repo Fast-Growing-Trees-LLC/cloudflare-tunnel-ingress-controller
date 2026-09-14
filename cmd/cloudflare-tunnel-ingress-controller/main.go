@@ -10,6 +10,7 @@ import (
 	cloudflarecontroller "github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/cloudflare-controller"
 	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/controller"
 	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/coverage"
+	"github.com/STRRL/cloudflare-tunnel-ingress-controller/pkg/exposure"
 	"github.com/cloudflare/cloudflare-go"
 	"github.com/go-logr/logr"
 	"github.com/go-logr/stdr"
@@ -49,6 +50,11 @@ type rootCmdFlags struct {
 	dnsCommentTemplate          string
 	metricsBindAddress          string
 	healthProbeBindAddress      string
+	accessEnabled               bool
+	accessPolicies              []string
+	accessAllowedIdps           []string
+	accessSessionDuration       string
+	accessResyncInterval        time.Duration
 }
 
 func main() {
@@ -70,6 +76,7 @@ func main() {
 		dnsCommentTemplate:         "managed by cloudflare-tunnel-ingress-controller, tunnel [{{.TunnelName}}]",
 		metricsBindAddress:         ":9090",
 		healthProbeBindAddress:     ":8081",
+		accessResyncInterval:       10 * time.Minute,
 	}
 
 	crlog.SetLogger(rootLogger.WithName("controller-runtime"))
@@ -97,6 +104,11 @@ func main() {
 			options.dnsCommentTemplate = viper.GetString("dns-comment-template")
 			options.metricsBindAddress = viper.GetString("metrics-bind-address")
 			options.healthProbeBindAddress = viper.GetString("health-probe-bind-address")
+			options.accessEnabled = viper.GetBool("access-enabled")
+			options.accessPolicies = viper.GetStringSlice("access-policies")
+			options.accessAllowedIdps = viper.GetStringSlice("access-allowed-idps")
+			options.accessSessionDuration = viper.GetString("access-session-duration")
+			options.accessResyncInterval = viper.GetDuration("access-resync-interval")
 			controllerDeploymentName := viper.GetString("controller-deployment-name")
 
 			stdr.SetVerbosity(options.logLevel)
@@ -110,10 +122,21 @@ func main() {
 				os.Exit(1)
 			}
 
+			// one value, two consumers: skew between a guard that thinks Access
+			// is on and a client that thinks it is off would publish an
+			// annotated hostname with no application
+			accessDefaults := exposure.AccessDefaults{
+				Enabled:         options.accessEnabled,
+				Policies:        options.accessPolicies,
+				AllowedIdps:     options.accessAllowedIdps,
+				SessionDuration: options.accessSessionDuration,
+				ResyncInterval:  options.accessResyncInterval,
+			}
+
 			var tunnelClient *cloudflarecontroller.TunnelClient
 
 			logger.V(3).Info("bootstrap tunnel client with tunnel name", "account-id", options.cloudflareAccountId, "tunnel-name", options.cloudflareTunnelName)
-			tunnelClient, err = cloudflarecontroller.BootstrapTunnelClientWithTunnelName(ctx, logger.WithName("tunnel-client"), cloudflareClient, options.cloudflareAccountId, options.cloudflareTunnelName, options.dnsCommentTemplate)
+			tunnelClient, err = cloudflarecontroller.BootstrapTunnelClientWithTunnelName(ctx, logger.WithName("tunnel-client"), cloudflareClient, options.cloudflareAccountId, options.cloudflareTunnelName, options.dnsCommentTemplate, accessDefaults)
 			if err != nil {
 				logger.Error(err, "bootstrap tunnel client with tunnel name")
 				os.Exit(1)
@@ -166,6 +189,7 @@ func main() {
 					ControllerClassName: options.controllerClass,
 					ClusterDomain:       options.clusterDomain,
 					CFTunnelClient:      tunnelClient,
+					Access:              accessDefaults,
 				})
 			if err != nil {
 				return err
@@ -256,6 +280,11 @@ func main() {
 	rootCommand.PersistentFlags().String("controller-deployment-name", "", "name of the controller Deployment, set as owner of the connector resources so garbage collection removes them on uninstall")
 	rootCommand.PersistentFlags().StringVar(&options.metricsBindAddress, "metrics-bind-address", options.metricsBindAddress, "address for the metrics endpoint, set to 0 to disable")
 	rootCommand.PersistentFlags().StringVar(&options.healthProbeBindAddress, "health-probe-bind-address", options.healthProbeBindAddress, "address for the healthz/readyz endpoints, set to 0 to disable")
+	rootCommand.PersistentFlags().BoolVar(&options.accessEnabled, "access-enabled", options.accessEnabled, "manage Cloudflare Access applications for ingresses annotated with cloudflare-tunnel-ingress-controller.strrl.dev/access. When disabled the controller makes no Access API calls at all. Requires the API token to carry the Access: Apps Write permission")
+	rootCommand.PersistentFlags().StringSliceVar(&options.accessPolicies, "access-policies", options.accessPolicies, "default reusable Cloudflare Access policy IDs to attach, in ascending order of precedence. Overridden per ingress by the access-policies annotation")
+	rootCommand.PersistentFlags().StringSliceVar(&options.accessAllowedIdps, "access-allowed-idps", options.accessAllowedIdps, "default Cloudflare Access identity provider IDs. Empty lets Cloudflare apply the organisation default")
+	rootCommand.PersistentFlags().StringVar(&options.accessSessionDuration, "access-session-duration", options.accessSessionDuration, "default Cloudflare Access session duration, for example \"24h\". Empty omits the field and lets Cloudflare apply its own default")
+	rootCommand.PersistentFlags().DurationVar(&options.accessResyncInterval, "access-resync-interval", options.accessResyncInterval, "how often each controlled ingress is re-reconciled so an Access application deleted outside Kubernetes is recreated. Ignored unless --access-enabled. Set to 0 to disable, accepting that such an application leaves the hostname public until the next ingress event")
 	rootCommand.PersistentFlags().StringVar(&options.dnsCommentTemplate, "dns-comment-template", options.dnsCommentTemplate, "Go template for DNS record comments. Available variables: {{.TunnelName}}, {{.TunnelId}}, {{.Hostname}}. Set to empty string to disable. Note: Cloudflare limits comment length by plan (Free: 100, Pro/Biz/Ent: 500 chars). See https://developers.cloudflare.com/dns/manage-dns-records/reference/record-attributes/")
 
 	viper.AutomaticEnv()

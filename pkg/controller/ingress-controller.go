@@ -30,11 +30,19 @@ type IngressController struct {
 	ingressClassName    string
 	controllerClassName string
 	clusterDomain       string
-	tunnelClient        *cloudflarecontroller.TunnelClient
+	tunnelClient        cloudflarecontroller.TunnelClientInterface
+	// access is the same value the tunnel client holds, one value with two
+	// consumers so the guard below and the client can never disagree about
+	// whether Access is available
+	access exposure.AccessDefaults
 }
 
-func NewIngressController(logger logr.Logger, kubeClient client.Client, recorder record.EventRecorder, ingressClassName string, controllerClassName string, clusterDomain string, tunnelClient *cloudflarecontroller.TunnelClient) *IngressController {
-	return &IngressController{logger: logger, kubeClient: kubeClient, recorder: recorder, ingressClassName: ingressClassName, controllerClassName: controllerClassName, clusterDomain: clusterDomain, tunnelClient: tunnelClient}
+// accessNotEnabledMessage names the exact fix, a describe on the ingress is
+// where an operator looks first.
+const accessNotEnabledMessage = "ingress requests Cloudflare Access but the controller was started without --access-enabled; set access.enabled=true in the chart and give the API token the Access: Apps Write permission"
+
+func NewIngressController(logger logr.Logger, kubeClient client.Client, recorder record.EventRecorder, ingressClassName string, controllerClassName string, clusterDomain string, tunnelClient cloudflarecontroller.TunnelClientInterface, access exposure.AccessDefaults) *IngressController {
+	return &IngressController{logger: logger, kubeClient: kubeClient, recorder: recorder, ingressClassName: ingressClassName, controllerClassName: controllerClassName, clusterDomain: clusterDomain, tunnelClient: tunnelClient, access: access}
 }
 
 func (i *IngressController) Reconcile(ctx context.Context, request reconcile.Request) (reconcile.Result, error) {
@@ -89,6 +97,16 @@ func (i *IngressController) Reconcile(ctx context.Context, request reconcile.Req
 			i.logger.Error(err, "extract exposures from ingress, skipped", "triggered-by", request.NamespacedName, "ingress", fmt.Sprintf("%s/%s", ingress.Namespace, ingress.Name))
 			i.recorder.Event(&ingress, v1.EventTypeWarning, EventReasonTransformFailed, err.Error())
 		}
+		// fail closed: an ingress that asks for Access on a controller that
+		// cannot do Access is not exposed at all
+		if !i.access.Enabled && slices.ContainsFunc(exposures, func(item exposure.Exposure) bool { return item.AccessEnabled }) {
+			i.logger.Info("ingress requests Cloudflare Access but the controller was started without --access-enabled, exposures skipped",
+				"triggered-by", request.NamespacedName,
+				"ingress", fmt.Sprintf("%s/%s", ingress.Namespace, ingress.Name),
+			)
+			i.recorder.Event(&ingress, v1.EventTypeWarning, EventReasonAccessNotEnabled, accessNotEnabledMessage)
+			exposures = nil
+		}
 		allExposures = append(allExposures, exposures...)
 	}
 	i.logger.V(3).Info("all exposures", "exposures", allExposures)
@@ -128,6 +146,13 @@ func (i *IngressController) Reconcile(ctx context.Context, request reconcile.Req
 	}
 
 	i.logger.V(3).Info("reconcile completed", "triggered-by", request.NamespacedName)
+	// an Access application deleted out of band changes nothing in Kubernetes,
+	// so nothing event driven fires, requeue to bound how long a hostname can
+	// stay public without the application it declared. With Access off the
+	// controller stays purely event driven, exactly as before.
+	if i.access.Enabled && i.access.ResyncInterval > 0 {
+		return reconcile.Result{RequeueAfter: i.access.ResyncInterval}, nil
+	}
 	return reconcile.Result{}, nil
 }
 

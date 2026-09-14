@@ -43,6 +43,22 @@ spec:
             - --cloudflared-protocol={{ .Values.cloudflared.protocol }}
             - --cluster-domain={{ .Values.clusterDomain | default "cluster.local" }}
             - "--dns-comment-template={{ .Values.dnsCommentTemplate | default "" }}"
+            {{- if .Values.access.enabled }}
+            - --access-enabled
+            {{- range .Values.access.policies }}
+            - --access-policies={{ . }}
+            {{- end }}
+            {{- range .Values.access.allowedIdps }}
+            - --access-allowed-idps={{ . }}
+            {{- end }}
+            {{- if .Values.access.sessionDuration }}
+            - --access-session-duration={{ .Values.access.sessionDuration }}
+            {{- end }}
+            {{- /* emit the flag for any value that is set, including the integer 0 that disables the resync. Plain truthiness would drop 0 and leave the controller on its own 10m default, which is the opposite of what the value says. Empty string is the one value that must not be emitted: time.ParseDuration("") is an error. */}}
+            {{- if and (not (kindIs "invalid" .Values.access.resyncInterval)) (ne (toString .Values.access.resyncInterval) "") }}
+            - --access-resync-interval={{ .Values.access.resyncInterval }}
+            {{- end }}
+            {{- end }}
             {{- range .Values.cloudflared.extraArgs }}
             - --cloudflared-extra-args={{ . }}
             {{- end }}

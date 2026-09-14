@@ -23,6 +23,19 @@ type Exposure struct {
 	// tunnel ingress rule. DNS can then be delegated to an external system, e.g.
 	// external-dns or a Cloudflare Load Balancer targeting the tunnel directly.
 	DisableDNSManagement bool
+	// AccessEnabled requests that the controller manage a Cloudflare Access
+	// application in front of this hostname. It has no effect unless the controller
+	// was started with --access-enabled.
+	AccessEnabled bool
+	// AccessPolicies is the list of existing reusable Access policy IDs to attach,
+	// in ascending order of precedence. nil means the controller default applies.
+	AccessPolicies []string
+	// AccessAllowedIdps is the list of Access identity provider IDs. nil means the
+	// controller default applies.
+	AccessAllowedIdps []string
+	// AccessSessionDuration is the Access session duration, for example "24h".
+	// nil means the controller default applies.
+	AccessSessionDuration *string
 
 	// The fields below map to cloudflared originRequest settings, nil means
 	// the cloudflared default applies.
@@ -46,6 +59,16 @@ type Exposure struct {
 	DisableChunkedEncoding *bool
 	// HTTP2Origin connects to the origin with HTTP/2.
 	HTTP2Origin *bool
+}
+
+// AccessDefaults are the controller level Access settings an exposure falls
+// back to. It is the single source of truth for whether Access is enabled.
+type AccessDefaults struct {
+	Enabled         bool
+	Policies        []string
+	AllowedIdps     []string
+	SessionDuration string
+	ResyncInterval  time.Duration
 }
 
 // Active returns the exposures that are not marked as deleted, preserving order.

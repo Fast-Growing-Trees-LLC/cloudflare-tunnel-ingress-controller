@@ -22,6 +22,30 @@ const AnnotationDisableDNSManagement = "cloudflare-tunnel-ingress-controller.str
 const AnnotationDisableDNSManagementTrue = "true"
 const AnnotationDisableDNSManagementFalse = "false"
 
+// AnnotationAccess enables a Cloudflare Access application in front of every
+// hostname produced by this ingress. Requires --access-enabled on the controller.
+// Cannot be combined with the disable-dns-management annotation, and cannot be
+// used on a wildcard host.
+// Available values: "true" or "false", default "false".
+const AnnotationAccess = "cloudflare-tunnel-ingress-controller.strrl.dev/access"
+const AnnotationAccessTrue = "true"
+const AnnotationAccessFalse = "false"
+
+// AnnotationAccessPolicies is a comma separated list of existing reusable
+// Cloudflare Access policy IDs, in ascending order of precedence. Overrides
+// --access-policies entirely; the lists are not merged.
+const AnnotationAccessPolicies = "cloudflare-tunnel-ingress-controller.strrl.dev/access-policies"
+
+// AnnotationAccessAllowedIdps is a comma separated list of Cloudflare Access
+// identity provider IDs. Overrides --access-allowed-idps entirely.
+const AnnotationAccessAllowedIdps = "cloudflare-tunnel-ingress-controller.strrl.dev/access-allowed-idps"
+
+// AnnotationAccessSessionDuration is the Access session duration, for example
+// "24h" or "0s" to require re authentication on every request. Overrides
+// --access-session-duration. Once set on an application it cannot be cleared
+// through the API; see the values.yaml comment.
+const AnnotationAccessSessionDuration = "cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration"
+
 // The annotations below map to cloudflared originRequest settings applied to
 // every rule generated from the ingress. See
 // https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/

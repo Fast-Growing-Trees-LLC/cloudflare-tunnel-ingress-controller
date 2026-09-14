@@ -52,6 +52,11 @@ Pre-commit hooks are managed via [prek](https://prek.j178.dev/) (configured in `
 - `--ingress-class`: Ingress class name (default: "cloudflare-tunnel")
 - `--controller-class`: Controller class name (default: "strrl.dev/cloudflare-tunnel-ingress-controller")
 - `--namespace`: Namespace to execute cloudflared connector (default: "default")
+- `--access-enabled`: Manage Cloudflare Access applications for annotated ingresses (default: false). While false the controller makes no Access API calls; enabling it also requires `Access: Apps Write` on the API token
+- `--access-policies`: Default reusable Access policy IDs, ascending precedence (repeatable, default: empty)
+- `--access-allowed-idps`: Default Access identity provider IDs (repeatable, default: empty)
+- `--access-session-duration`: Default Access session duration as a non negative Go duration string, e.g. "24h" or "1h30m" (default: empty, Cloudflare's own default)
+- `--access-resync-interval`: How often each controlled ingress is re-reconciled so out-of-band Access drift is repaired (default: 10m, 0 disables)
 
 ### Supported Annotations
 - `cloudflare-tunnel-ingress-controller.strrl.dev/proxy-ssl-verify`: Enable/disable SSL verification ("on" or "off", default: "off")
@@ -59,6 +64,10 @@ Pre-commit hooks are managed via [prek](https://prek.j178.dev/) (configured in `
 - `cloudflare-tunnel-ingress-controller.strrl.dev/http-host-header`: Set HTTP Host header for the local webserver
 - `cloudflare-tunnel-ingress-controller.strrl.dev/origin-server-name`: Hostname on the origin server certificate
 - `cloudflare-tunnel-ingress-controller.strrl.dev/disable-dns-management`: Disable Cloudflare DNS record (CNAME/TXT) management for the ingress while still configuring the tunnel ingress rule, so DNS can be delegated to an external system such as external-dns or a Cloudflare Load Balancer ("true" or "false", default "false")
+- `cloudflare-tunnel-ingress-controller.strrl.dev/access`: Manage a Cloudflare Access application in front of every hostname produced by the ingress ("true" or "false", default "false"). Requires `--access-enabled`; cannot be combined with `disable-dns-management` or used on a wildcard host
+- `cloudflare-tunnel-ingress-controller.strrl.dev/access-policies`: Comma separated existing reusable Access policy IDs, ascending precedence (default: `--access-policies`)
+- `cloudflare-tunnel-ingress-controller.strrl.dev/access-allowed-idps`: Comma separated Access identity provider IDs (default: `--access-allowed-idps`)
+- `cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration`: Access session duration as a non negative Go duration string such as "24h" or "1h30m", or "0s" to re-authenticate every request (default: `--access-session-duration`)
 - Origin request settings mapping to cloudflared `originRequest` fields (see `pkg/controller/well_known_annotations.go`): `connect-timeout`, `tls-timeout`, `tcp-keepalive`, `no-happy-eyeballs`, `keepalive-connections`, `keepalive-timeout`, `no-tls-verify`, `disable-chunked-encoding`, `http2-origin`
 
 ## Testing Strategy

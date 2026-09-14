@@ -14,13 +14,22 @@ The controller reads Cloudflare credentials from a Kubernetes secret named `clou
 https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=[{"key":"zone","type":"read"},{"key":"dns","type":"edit"},{"key":"argotunnel","type":"edit"}]&name=Cloudflare%20Tunnel%20Ingress%20Controller&accountId=*&zoneId=all
 ```
 
-3. Confirm that the token has all three required permission scopes:
+Use this second template instead when you also enable [Cloudflare Access](/how-to/protect-with-cloudflare-access/). It adds the fourth scope to the same three:
+
+```text
+https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=[{"key":"zone","type":"read"},{"key":"dns","type":"edit"},{"key":"argotunnel","type":"edit"},{"key":"access","type":"edit"}]&name=Cloudflare%20Tunnel%20Ingress%20Controller&accountId=*&zoneId=all
+```
+
+3. Confirm that the token has the three required permission scopes, plus the fourth one when you need it:
    1. `Zone:Zone:Read`
    2. `Zone:DNS:Edit`
    3. `Account:Cloudflare Tunnel:Edit`
+   4. `Account:Access: Apps and Policies:Edit`, required only when `access.enabled` is `true` on the controller. Leave it off otherwise.
 
 4. Review the account and zone resources covered by the token.
 5. Create the token and copy its value. Store this value under the `api-token` Secret key described below.
+
+The controller reads the token once at startup. Adding the Access scope to a token a running controller is already using has no effect until you restart the controller.
 
 ## Secret keys
 
