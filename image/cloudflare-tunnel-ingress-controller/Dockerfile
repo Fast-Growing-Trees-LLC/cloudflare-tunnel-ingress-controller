@@ -10,6 +10,11 @@ ARG TARGETARCH
 
 WORKDIR /workspace
 
+# Optional PEM bundle for corporate TLS-inspecting proxies (e.g. Cloudflare
+# Gateway); the module download below fails cert verification without it.
+ARG EXTRA_CA_CERTS=""
+RUN if [ -n "$EXTRA_CA_CERTS" ]; then printf '%s\n' "$EXTRA_CA_CERTS" >> /etc/ssl/certs/ca-certificates.crt; fi
+
 # pre-copy/cache go.mod for pre-downloading dependencies and only redownloading them in subsequent builds if they change
 COPY go.mod go.sum ./
 RUN go mod download && go mod verify
