@@ -224,6 +224,56 @@ func Test_parseAccessSettings(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "auto redirect true is accepted",
+			host: "test.example.com",
+			annotations: map[string]string{
+				AnnotationAccess:             AnnotationAccessTrue,
+				AnnotationAccessAutoRedirect: "true",
+			},
+			want: &accessSettings{
+				Enabled:      true,
+				AutoRedirect: ptr.To(true),
+			},
+		},
+		{
+			name: "auto redirect false is accepted",
+			host: "test.example.com",
+			annotations: map[string]string{
+				AnnotationAccess:             AnnotationAccessTrue,
+				AnnotationAccessAutoRedirect: "false",
+			},
+			want: &accessSettings{
+				Enabled:      true,
+				AutoRedirect: ptr.To(false),
+			},
+		},
+		{
+			name: "unparseable auto redirect is rejected",
+			host: "test.example.com",
+			annotations: map[string]string{
+				AnnotationAccess:             AnnotationAccessTrue,
+				AnnotationAccessAutoRedirect: "banana",
+			},
+			wantErr: true,
+		},
+		{
+			name: "auto redirect without access is rejected",
+			host: "test.example.com",
+			annotations: map[string]string{
+				AnnotationAccessAutoRedirect: "true",
+			},
+			wantErr: true,
+		},
+		{
+			name: "auto redirect with access false is rejected",
+			host: "test.example.com",
+			annotations: map[string]string{
+				AnnotationAccess:             AnnotationAccessFalse,
+				AnnotationAccessAutoRedirect: "true",
+			},
+			wantErr: true,
+		},
+		{
 			name: "access combined with disable dns management is rejected",
 			host: "test.example.com",
 			annotations: map[string]string{

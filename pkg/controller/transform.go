@@ -110,10 +110,12 @@ func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient c
 		accessEnabled := access != nil && access.Enabled
 		var accessPolicies, accessAllowedIdps []string
 		var accessSessionDuration *string
+		var accessAutoRedirect *bool
 		if accessEnabled {
 			accessPolicies = access.Policies
 			accessAllowedIdps = access.AllowedIdps
 			accessSessionDuration = access.SessionDuration
+			accessAutoRedirect = access.AutoRedirect
 		}
 
 		var proxySSLVerifyEnabled *bool
@@ -187,6 +189,7 @@ func FromIngressToExposure(ctx context.Context, logger logr.Logger, kubeClient c
 				AccessPolicies:         accessPolicies,
 				AccessAllowedIdps:      accessAllowedIdps,
 				AccessSessionDuration:  accessSessionDuration,
+				AccessAutoRedirect:     accessAutoRedirect,
 				ConnectTimeout:         originRequest.ConnectTimeout,
 				TLSTimeout:             originRequest.TLSTimeout,
 				TCPKeepAlive:           originRequest.TCPKeepAlive,
@@ -307,6 +310,7 @@ type accessSettings struct {
 	Policies        []string
 	AllowedIdps     []string
 	SessionDuration *string
+	AutoRedirect    *bool
 }
 
 // validAccessSessionDuration reports whether the value is an Access session
@@ -332,7 +336,7 @@ func parseAccessSettings(ingress networkingv1.Ingress, host string) (*accessSett
 	value, ok := getAnnotation(ingress.Annotations, AnnotationAccess)
 	if !ok {
 		// settings that would silently do nothing are a security surprise
-		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration} {
+		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration, AnnotationAccessAutoRedirect} {
 			if _, present := getAnnotation(ingress.Annotations, key); present {
 				return nil, errors.Errorf(
 					"annotation %s requires %s: \"%s\"",
@@ -359,7 +363,7 @@ func parseAccessSettings(ingress networkingv1.Ingress, host string) (*accessSett
 	}
 
 	if !settings.Enabled {
-		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration} {
+		for _, key := range []string{AnnotationAccessPolicies, AnnotationAccessAllowedIdps, AnnotationAccessSessionDuration, AnnotationAccessAutoRedirect} {
 			if _, present := getAnnotation(ingress.Annotations, key); present {
 				return nil, errors.Errorf(
 					"annotation %s requires %s: \"%s\"",
@@ -404,6 +408,17 @@ func parseAccessSettings(ingress networkingv1.Ingress, host string) (*accessSett
 			)
 		}
 		settings.SessionDuration = ptr.To(duration)
+	}
+
+	if value, present := getAnnotation(ingress.Annotations, AnnotationAccessAutoRedirect); present {
+		autoRedirect, err := strconv.ParseBool(value)
+		if err != nil {
+			return nil, errors.Errorf(
+				"invalid value %q for annotation %s, available values: \"true\" or \"false\"",
+				value, AnnotationAccessAutoRedirect,
+			)
+		}
+		settings.AutoRedirect = ptr.To(autoRedirect)
 	}
 
 	return &settings, nil

@@ -1543,6 +1543,48 @@ func Test_accessAppNeedsUpdate(t *testing.T) {
 			},
 			want: false,
 		},
+		{
+			// the dashboard-survival guarantee: an unannotated ingress never
+			// reverts a hand-set auto_redirect_to_identity
+			name: "nil desired auto redirect leaves a dashboard-set flag alone",
+			actual: func(a cloudflare.AccessApplication) cloudflare.AccessApplication {
+				a.AutoRedirectToIdentity = ptr.To(true)
+				return a
+			},
+			want: false,
+		},
+		{
+			name: "desired auto redirect true against unset actual is drift",
+			desired: func(s AccessApplicationSpec) AccessApplicationSpec {
+				s.AutoRedirect = ptr.To(true)
+				return s
+			},
+			want: true,
+		},
+		{
+			name: "matching auto redirect is not drift",
+			actual: func(a cloudflare.AccessApplication) cloudflare.AccessApplication {
+				a.AutoRedirectToIdentity = ptr.To(true)
+				return a
+			},
+			desired: func(s AccessApplicationSpec) AccessApplicationSpec {
+				s.AutoRedirect = ptr.To(true)
+				return s
+			},
+			want: false,
+		},
+		{
+			name: "desired auto redirect false against actual true is drift",
+			actual: func(a cloudflare.AccessApplication) cloudflare.AccessApplication {
+				a.AutoRedirectToIdentity = ptr.To(true)
+				return a
+			},
+			desired: func(s AccessApplicationSpec) AccessApplicationSpec {
+				s.AutoRedirect = ptr.To(false)
+				return s
+			},
+			want: true,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1569,16 +1611,18 @@ func Test_accessCreateParams(t *testing.T) {
 		Policies:        []string{WhateverPolicyA, WhateverPolicyB},
 		AllowedIdps:     []string{WhateverIdp},
 		Tags:            ownedTags(),
+		AutoRedirect:    ptr.To(true),
 	}
 	got := accessCreateParams(spec)
 	want := cloudflare.CreateAccessApplicationParams{
-		Name:            WhateverHostname,
-		Domain:          WhateverHostname,
-		Type:            cloudflare.SelfHosted,
-		SessionDuration: "12h",
-		AllowedIdps:     []string{WhateverIdp},
-		Policies:        []string{WhateverPolicyA, WhateverPolicyB},
-		Tags:            ownedTags(),
+		Name:                   WhateverHostname,
+		Domain:                 WhateverHostname,
+		Type:                   cloudflare.SelfHosted,
+		SessionDuration:        "12h",
+		AllowedIdps:            []string{WhateverIdp},
+		Policies:               []string{WhateverPolicyA, WhateverPolicyB},
+		Tags:                   ownedTags(),
+		AutoRedirectToIdentity: ptr.To(true),
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("accessCreateParams() = %+v, want %+v", got, want)

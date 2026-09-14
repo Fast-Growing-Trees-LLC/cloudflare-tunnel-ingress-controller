@@ -25,6 +25,7 @@ Setting `access: "true"` without a policy takes the hostname offline. An applica
 | `cloudflare-tunnel-ingress-controller.strrl.dev/access-policies`          | Comma separated reusable Access policy IDs, in ascending order of precedence. IDs are UUIDs, not policy names. Empty is not allowed, and a hostname left with no policy at all is withheld. |
 | `cloudflare-tunnel-ingress-controller.strrl.dev/access-allowed-idps`      | Comma separated Access identity provider IDs. Empty is not allowed, omit the annotation to keep the controller default.                        |
 | `cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration`  | Access session duration as a non-negative Go duration string, such as `"24h"`, `"1h30m"`, or `"0s"` to require re-authentication on every request. |
+| `cloudflare-tunnel-ingress-controller.strrl.dev/access-auto-redirect`     | Sets `auto_redirect_to_identity`: with exactly one allowed identity provider the Access login page is skipped. `"true"` or `"false"`; omit to leave the field alone (a dashboard-set value survives). |
 
 ## Origin request settings
 

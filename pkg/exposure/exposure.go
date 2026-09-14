@@ -36,6 +36,10 @@ type Exposure struct {
 	// AccessSessionDuration is the Access session duration, for example "24h".
 	// nil means the controller default applies.
 	AccessSessionDuration *string
+	// AccessAutoRedirect sets auto_redirect_to_identity on the Access
+	// application. nil means the controller leaves the field alone (a
+	// dashboard-set value survives).
+	AccessAutoRedirect *bool
 
 	// The fields below map to cloudflared originRequest settings, nil means
 	// the cloudflared default applies.
