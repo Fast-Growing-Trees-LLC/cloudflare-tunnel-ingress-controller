@@ -68,6 +68,7 @@ Pre-commit hooks are managed via [prek](https://prek.j178.dev/) (configured in `
 - `cloudflare-tunnel-ingress-controller.strrl.dev/access-policies`: Comma separated existing reusable Access policy IDs, ascending precedence (default: `--access-policies`)
 - `cloudflare-tunnel-ingress-controller.strrl.dev/access-allowed-idps`: Comma separated Access identity provider IDs (default: `--access-allowed-idps`)
 - `cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration`: Access session duration as a non negative Go duration string such as "24h" or "1h30m", or "0s" to re-authenticate every request (default: `--access-session-duration`)
+- `cloudflare-tunnel-ingress-controller.strrl.dev/access-auto-redirect`: Set `auto_redirect_to_identity` on the Access application ("true" or "false"; with one allowed IdP the login page is skipped). Absent = leave the field alone, so dashboard-set values survive; annotation-only, no controller default flag
 - Origin request settings mapping to cloudflared `originRequest` fields (see `pkg/controller/well_known_annotations.go`): `connect-timeout`, `tls-timeout`, `tcp-keepalive`, `no-happy-eyeballs`, `keepalive-connections`, `keepalive-timeout`, `no-tls-verify`, `disable-chunked-encoding`, `http2-origin`
 
 ## Testing Strategy

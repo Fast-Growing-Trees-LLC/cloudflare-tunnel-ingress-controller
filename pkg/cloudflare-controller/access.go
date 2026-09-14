@@ -74,6 +74,10 @@ type AccessApplicationSpec struct {
 	Policies        []string // order is precedence
 	AllowedIdps     []string
 	Tags            []string // ownership tags, unioned with any tags already on the application
+	// AutoRedirect maps to auto_redirect_to_identity. nil follows the same
+	// convention as the empty SessionDuration: leave the field alone, so a
+	// dashboard-set value survives until an annotation manages it.
+	AutoRedirect *bool
 }
 
 type AccessOperationCreate struct{ Spec AccessApplicationSpec }
@@ -323,6 +327,9 @@ func resolveAccessSettings(e exposure.Exposure, d exposure.AccessDefaults) Acces
 		spec.SessionDuration = *e.AccessSessionDuration
 	}
 
+	// annotation-only, no controller default: nil = unmanaged
+	spec.AutoRedirect = e.AccessAutoRedirect
+
 	return spec
 }
 
@@ -432,6 +439,11 @@ func accessAppNeedsUpdate(actual cloudflare.AccessApplication, desired AccessApp
 	if !slices.Equal(policyIDs(actual.Policies), desired.Policies) {
 		return true
 	}
+	// same clearing convention: a nil desired value is "leave it alone", so a
+	// dashboard-set flag survives until an annotation manages it
+	if desired.AutoRedirect != nil && !ptr.Equal(actual.AutoRedirectToIdentity, desired.AutoRedirect) {
+		return true
+	}
 	return !equalStringSets(actual.Tags, desired.Tags)
 }
 
@@ -447,13 +459,14 @@ func equalStringSets(a []string, b []string) bool {
 // accessCreateParams renders the create request for one planned application.
 func accessCreateParams(spec AccessApplicationSpec) cloudflare.CreateAccessApplicationParams {
 	return cloudflare.CreateAccessApplicationParams{
-		Name:            spec.Name,
-		Domain:          spec.Hostname,
-		Type:            cloudflare.SelfHosted,
-		SessionDuration: spec.SessionDuration,
-		AllowedIdps:     spec.AllowedIdps,
-		Policies:        spec.Policies,
-		Tags:            spec.Tags,
+		Name:                   spec.Name,
+		Domain:                 spec.Hostname,
+		Type:                   cloudflare.SelfHosted,
+		SessionDuration:        spec.SessionDuration,
+		AllowedIdps:            spec.AllowedIdps,
+		Policies:               spec.Policies,
+		Tags:                   spec.Tags,
+		AutoRedirectToIdentity: spec.AutoRedirect, // *bool omitempty: nil = Cloudflare default
 	}
 }
 
@@ -465,14 +478,15 @@ func accessCreateParams(spec AccessApplicationSpec) cloudflare.CreateAccessAppli
 // create struct leaves it nil and silently fails to reconcile policy drift.
 func accessUpdateParams(operation AccessOperationUpdate) cloudflare.UpdateAccessApplicationParams {
 	return cloudflare.UpdateAccessApplicationParams{
-		ID:              operation.OldApplication.ID,
-		Name:            operation.Spec.Name,
-		Domain:          operation.Spec.Hostname,
-		Type:            cloudflare.SelfHosted,
-		SessionDuration: operation.Spec.SessionDuration,
-		AllowedIdps:     operation.Spec.AllowedIdps,
-		Policies:        ptr.To(operation.Spec.Policies),
-		Tags:            operation.Spec.Tags,
+		ID:                     operation.OldApplication.ID,
+		Name:                   operation.Spec.Name,
+		Domain:                 operation.Spec.Hostname,
+		Type:                   cloudflare.SelfHosted,
+		SessionDuration:        operation.Spec.SessionDuration,
+		AllowedIdps:            operation.Spec.AllowedIdps,
+		Policies:               ptr.To(operation.Spec.Policies),
+		Tags:                   operation.Spec.Tags,
+		AutoRedirectToIdentity: operation.Spec.AutoRedirect, // *bool omitempty: nil = leave alone
 	}
 }
 

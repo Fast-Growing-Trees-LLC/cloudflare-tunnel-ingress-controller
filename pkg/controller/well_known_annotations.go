@@ -46,6 +46,15 @@ const AnnotationAccessAllowedIdps = "cloudflare-tunnel-ingress-controller.strrl.
 // through the API; see the values.yaml comment.
 const AnnotationAccessSessionDuration = "cloudflare-tunnel-ingress-controller.strrl.dev/access-session-duration"
 
+// AnnotationAccessAutoRedirect sets auto_redirect_to_identity on the Access
+// application: with exactly one allowed identity provider the Access login
+// page is skipped and the browser goes straight to that provider. Absent
+// means the controller leaves the field alone (a dashboard-set value
+// survives); "true"/"false" manage it declaratively, and a rename
+// (create+delete) then carries the value onto the new application instead of
+// silently dropping a hand edit.
+const AnnotationAccessAutoRedirect = "cloudflare-tunnel-ingress-controller.strrl.dev/access-auto-redirect"
+
 // The annotations below map to cloudflared originRequest settings applied to
 // every rule generated from the ingress. See
 // https://developers.cloudflare.com/cloudflare-one/networks/connectors/cloudflare-tunnel/configure-tunnels/origin-parameters/
